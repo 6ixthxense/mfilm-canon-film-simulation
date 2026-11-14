@@ -1,0 +1,79 @@
+# The record of a paired shot, to fill in. How to shoot one: paired-shot.md (ไทย: paired-shot.th.md).
+#
+# Write something after every "field:" below. Everything after a "#" at the
+# start of a line or after a space is a comment and can stay. The filled-in
+# record goes to ml-dev/references/<name>/record.txt; the one there for the
+# made-up paired shot shows every line written out.
+
+paired shot:                  # a name for this one: the film stock and a number, gold200-1
+film stock:                   # as ml-dev/films/films.py names it: gold200, portra400, hp5
+
+# the film
+film format:                  # 135, 24 exposures
+film expiry:                  # the date on the box: 2027-06
+film batch:                   # the number on the box
+film storage:                 # where it was kept until it was shot: fridge, shelf
+film camera:                  # the body
+film lens:
+
+# the Canon
+canon camera:                 # the camera, with a roll of this film stock loaded in M-Film, shooting RAW
+canon lens:                   # best the same lens as on the film camera
+
+# the light and the chart
+light:                        # the main light: direct sun, clear sky. A tungsten film stock: the lamp
+second light:                 # for frames 14 to 16: open shade under blue sky. A tungsten film stock: direct sun
+date:                         # the day and the time of the first frame: 2026-11-14 12:00
+chart:                        # ColorChecker Classic, 24 patches, full size
+chart age:                    # when the chart was bought
+
+# the lab
+lab:                          # the maintainer's own is written as "the maintainer's lab"
+process:                      # C-41, E-6, or for black-and-white the developer, dilution and time
+scanner:                      # the machine: Noritsu HS-1800
+scanner settings:             # the locked scan: corrections off, the values set on frame 1's grey patch, sharpening, size
+originals:                    # who keeps the negatives and the full-size scans
+
+# who
+shot by:
+consent:                      # the maintainer: "the maintainer's own". Anyone else: the issue the consent text was written in
+
+# "yes" is written later, when the film stock first passes
+measured: no
+
+# The frames. Write each one's shutter speed between the second and the third "|".
+
+frame 1:  chart, main light | 0    |  | built from
+frame 2:  chart, main light | -3   |  | built from
+frame 3:  chart, main light | -2   |  | built from
+frame 4:  chart, main light | -1   |  | held back, decides
+frame 5:  chart, main light | +0.5 |  | held back, decides
+frame 6:  chart, main light | +1   |  | built from
+frame 7:  chart, main light | +1.5 |  | held back, decides
+frame 8:  chart, main light | +2   |  | built from
+frame 9:  chart, main light | +3   |  | highlights
+frame 10: chart, main light | +4   |  | highlights
+frame 11: grey card, out of focus, main light | -2 |  | grain
+frame 12: grey card, out of focus, main light | 0  |  | grain
+frame 13: grey card, out of focus, main light | +2 |  | grain
+frame 14: chart, open shade | -1 |  | held back, reported
+frame 15: chart, open shade | 0  |  | held back, reported
+frame 16: chart, open shade | +1 |  | held back, reported
+frame 17: own hand and forearm | 0 | | by eye
+frame 18: green leaves in sun | 0 | | by eye
+frame 19: blue sky with white cloud | 0 | | by eye
+frame 20: red, orange and yellow things | 0 | | by eye
+frame 21: deep shade and sun in one frame | 0 | | by eye
+frame 22: a white wall in sun | 0 | | by eye
+frame 23: lens cap on | | | bare film
+frame 24: chart, main light | 0 |  | drift
+
+# Added when the files arrive, by whoever puts the record in the repository:
+# where the chart is in each set of pictures, where the files are published,
+# and each file's checksum. The made-up record explains them.
+#
+# chart in canon: x,y x,y x,y x,y
+# chart in locked: x,y x,y x,y x,y
+# chart in automatic: x,y x,y x,y x,y
+# files at: https://github.com/.../releases/download/<tag>
+# file canon/01.CR2: <sha256>

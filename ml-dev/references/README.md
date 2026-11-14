@@ -5,6 +5,9 @@ real film: the same chart frames on the film, scanned by a lab as a **locked sca
 paired shot has a folder here with its **record**, `record.txt`: what was shot, how, what each frame is used
 for, and where the chart is in each picture. The words in bold are in [GLOSSARY.md](../../GLOSSARY.md).
 
+How a paired shot is made, and the record to fill in: [docs/paired-shot.md](../../docs/paired-shot.md)
+([ไทย](../../docs/paired-shot.th.md)).
+
 No film has been shot yet, so no film stock is measured. The one folder is [made-up](made-up/record.txt): a
 paired shot that is drawn, not shot, so the measuring command can be tested. Its record is the example of
 the format, with every field explained in it.

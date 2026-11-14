@@ -207,3 +207,9 @@ mlinstall and **Disable Boot Disk**.
 
 Thank you! Every camera someone tries moves it from *testing* to *working* in the
 [list on the front page](README.md#cameras).
+
+## 5. If you shoot film: a paired shot
+
+A film stock is measured against the real film from one roll of it and the same frames on a Canon, with
+a colour chart in them. How to shoot one, what to ask the lab, and what to hand over:
+[docs/paired-shot.md](docs/paired-shot.md) ([ไทย](docs/paired-shot.th.md)).
