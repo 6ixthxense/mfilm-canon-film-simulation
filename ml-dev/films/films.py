@@ -111,6 +111,13 @@ FILMS["cinestill400t"] = dict(
 
 FILMS.update(FILM_LUTS)
 
+# What a film stock stands for, where it is not a real camera film that can be measured against a roll of
+# itself (#120). OWN: M-Film's own inventions, which stand for no real film. IMPRESSION: infrared film, which a
+# Canon with its infrared filter in place does not record as the film does, so no look built from its frame can
+# match. Every other film stock is "in the style of" its film until a paired shot measures it (states.py).
+OWN = {"cinestill400t"}
+IMPRESSION = {"hie", "ir400"}
+
 
 def short_name(key):
     """'Portra400': the film's name without brand, spaces or punctuation."""

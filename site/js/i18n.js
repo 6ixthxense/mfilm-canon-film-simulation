@@ -112,6 +112,11 @@ Object.assign(STR.en, {
   'how.3.t': 'Develop the roll', 'how.3.d': 'In the camera\'s own darkroom, or on your computer with Darkrooms. Then see what you got.',
   'films.d': 'The same RAW from an EOS M, developed with every film. Each has its own colour, grain, halation and softness.',
   'films.credit': 'The colour of 59 of these films is a table by <a href="https://patdavid.net">Pat David</a>, shared under <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>: a look made by eye, not a measurement of the film.',
+  'films.state': (n, measured, style, impression, own) =>
+    (measured.length ? `${measured.length} of the ${n} film stocks ${measured.length === 1 ? 'is' : 'are'} measured against the real film: ${measured.join(', ')}. `
+      : `None of the ${n} film stocks is measured against the real film yet. `) +
+    `${style} are in the style of their film, ${impression} are impressions of infrared film, and ${own.join(', ')} is M-Film's own. ` +
+    '<a class="link" href="https://github.com/HNGSeries/mfilm-canon-film-simulation/blob/main/docs/paired-shot.md">How a film stock becomes measured →</a>',
   'films.loading': 'Loading the films…', 'films.none': 'The films couldn\'t be loaded here:',
   'shelf.Colour negative': 'Colour negative', 'shelf.Slide and cross-processed': 'Slide and cross-processed',
   'shelf.Black and white': 'Black and white', 'shelf.Cinema': 'Cinema',
@@ -159,6 +164,11 @@ Object.assign(STR.th, {
   'how.3.t': 'ล้างฟิล์ม', 'how.3.d': 'ล้างในห้องมืดของกล้องเอง หรือบนคอมด้วย Darkrooms แล้วค่อยลุ้นว่าได้รูปอะไรมา',
   'films.d': 'RAW ไฟล์เดียวกันจาก EOS M ล้างด้วยฟิล์มทุกแบบ แต่ละม้วนมีสี เกรน halation และความนุ่มของตัวเอง',
   'films.credit': 'สีของฟิล์ม 59 แบบในนี้มาจากตารางของ <a href="https://patdavid.net">Pat David</a> ซึ่งเผยแพร่ภายใต้ <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a> เป็นลุคที่ทำด้วยตา ไม่ใช่ค่าที่วัดจากฟิล์มจริง',
+  'films.state': (n, measured, style, impression, own) =>
+    (measured.length ? `มี film stock ${measured.length} แบบจาก ${n} แบบที่วัดเทียบกับฟิล์มจริงแล้ว: ${measured.join(', ')} `
+      : `ยังไม่มี film stock ใดใน ${n} แบบที่วัดเทียบกับฟิล์มจริงแล้ว `) +
+    `${style} แบบเป็นลุคในสไตล์ของฟิล์มนั้น ${impression} แบบเป็นภาพจำลองความรู้สึกของฟิล์มอินฟราเรด และ ${own.join(', ')} เป็นลุคของ M-Film เอง ` +
+    '<a class="link" href="https://github.com/HNGSeries/mfilm-canon-film-simulation/blob/main/docs/paired-shot.th.md">วิธีที่ film stock จะนับว่าวัดแล้ว →</a>',
   'films.loading': 'กำลังโหลดฟิล์ม…', 'films.none': 'โหลดรายชื่อฟิล์มไม่ได้ ดูได้ที่',
   'shelf.Colour negative': 'สีเนกาทีฟ', 'shelf.Slide and cross-processed': 'สไลด์และ cross-process',
   'shelf.Black and white': 'ขาวดำ', 'shelf.Cinema': 'ฟิล์มภาพยนตร์',

@@ -200,6 +200,10 @@ DSLR ถ่ายผ่านช่องมองกระจก ไม่ม�
 
 **[ดูฟิล์มทั้ง 68 แบบ บนรูปเดียวกัน →](FILMS.md)**
 
+<!-- film-states:start -->
+**ยังไม่มี film stock ใดใน 68 แบบที่วัดเทียบกับฟิล์มจริงแล้ว** 65 แบบเป็นลุค "ในสไตล์ของ" ฟิล์มนั้น และยังไม่ได้วัด 2 แบบ (Kodak HIE Infrared, Rollei Infrared 400) เป็นภาพจำลองความรู้สึกของฟิล์มอินฟราเรด เพราะ Canon ที่ยังมีฟิลเตอร์อินฟราเรดอยู่บันทึกสิ่งที่ฟิล์มแบบนั้นบันทึกไม่ได้ และ 1 แบบ (CineStill 400T) เป็นลุคของ M-Film เอง ไม่ได้แทนฟิล์มจริงตัวใด film stock จะนับว่าวัดแล้วเมื่อสีและโทนอยู่ใน pass mark ของสแกนจากแล็บของฟิล์มจริงม้วนหนึ่ง ที่ถ่ายคู่กับ Canon: [วิธีที่ film stock จะนับว่าวัดแล้ว](docs/paired-shot.th.md) · [สถานะของ film stock ทุกตัว](FILMS.md)
+<!-- film-states:end -->
+
 สีของฟิล์ม 59 แบบมาจากตารางจำลองฟิล์มของ [Pat David](https://patdavid.net) ซึ่งเผยแพร่ภายใต้
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) โดยเอามาจาก G'MIC ผ่านชุด [Film-Luts](https://github.com/YahiaAngelo/Film-Luts)
 ที่เหลือมาจากโมเดลฟิล์มของ M-Film เอง ([`ml-dev/films/films.py`](ml-dev/films/films.py)) ตารางพวกนี้เป็นลุคที่ทำด้วยตา

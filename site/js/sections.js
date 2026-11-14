@@ -20,6 +20,13 @@ function drawTabs() {
     `<button role="tab" aria-selected="${i === current}" class="${i === current ? 'on' : ''}" data-i="${i}">` +
     `${esc(T('shelf.' + s.shelf))}<span>${s.films.length}</span></button>`).join('');
 }
+// how many film stocks are measured against the real film, from each one's state (ml-dev/films/states.py)
+function drawState() {
+  const all = shelves.flatMap((s) => s.films);
+  const names = (kind) => all.filter((f) => f.state === kind).map((f) => f.name);
+  document.getElementById('films-state').innerHTML =
+    T('films.state', all.length, names('measured'), names('style').length, names('impression').length, names('own'));
+}
 function drawShelf() {
   shown = shelves[current].films;
   grid.innerHTML = shown.map((f, i) => `
@@ -41,7 +48,8 @@ function openFilm(i) {
   const f = shown[at];
   lb.querySelector('img').src = `fos/films/${f.key}.jpg`;
   lb.querySelector('img').alt = f.name;
-  lb.querySelector('figcaption').innerHTML = `<b>${esc(f.name)}</b> ISO ${esc(f.iso)} · ${esc(f.process)}<br><span>${esc(f.desc)}</span>`;
+  lb.querySelector('figcaption').innerHTML = `<b>${esc(f.name)}</b> ISO ${esc(f.iso)} · ${esc(f.process)}<br><span>${esc(f.desc)}</span>` +
+    `<br><span>${esc(lang() === 'th' ? f.state_th : f.state_en)}</span>`;
   lb.hidden = false;
   document.body.classList.add('noscroll');
 }
@@ -101,14 +109,14 @@ Promise.all([
   fetch('fos/cameras.json').then((r) => r.json()),
 ]).then(([f, c]) => {
   shelves = f; cams = c;
-  drawTabs(); drawShelf(); drawCameras();
+  drawTabs(); drawShelf(); drawState(); drawCameras();
 }).catch((e) => {
   console.warn('sections:', e);
   grid.innerHTML = `<p class="muted">${esc(T('films.none'))} <a class="link" href="${REPO}/blob/main/FILMS.md">FILMS.md →</a></p>`;
 });
 darkrooms().catch((e) => console.warn('darkrooms:', e));
 document.addEventListener('mfilm:lang', () => {
-  if (shelves.length) drawTabs();
+  if (shelves.length) { drawTabs(); drawState(); }
   drawCameras();
   const v = document.getElementById('dr-version');
   if (v.dataset.version) v.textContent = T('dr.unsigned') + ' ' + T('dr.version', v.dataset.version);
