@@ -22,6 +22,7 @@ what measure.py reads in them:
 Needs numpy and Pillow.
 """
 
+import re
 import shutil
 import subprocess
 import sys
@@ -139,6 +140,22 @@ def main():
     refused("a film stock that is not on the shelf", lambda: Record(changed("film stock: gold200", "film stock: gold2000")).tone_only,
             "gold2000")
     refused("a set the record does not have", lambda: record.corners("frontier", 1), "frontier", "canon")
+
+    # ---- the page someone shoots from, and the record they fill in
+    docs = HERE.parents[1] / "docs"
+    empty = (docs / "paired-shot-record.txt").read_text(encoding="utf-8")
+    refused("the record to fill in, not filled in", lambda: Record(docs / "paired-shot-record.txt"), *measure.FIELDS)
+    filled = re.sub(r"(?m)^([a-z ]+):(\s+#.*|\s*)$", lambda m: m.group(1) + ": x" + m.group(2), empty)
+    filled = filled.replace("film stock: x", "film stock: gold200").replace("# chart in", "chart in").replace("x,y x,y x,y x,y", "0.3,0.3 0.7,0.3 0.7,0.7 0.3,0.7")
+    (tmp / "filled.txt").write_text(filled, encoding="utf-8")
+    mine = Record(tmp / "filled.txt")
+    frames = lambda r: [(f.n, f.shows, f.ev, f.use) for f in sorted(r.frames.values(), key=lambda f: f.n)]     # noqa: E731
+    check(frames(mine) == frames(record) and not mine.made_up and not mine.claimed and sorted(mine.chart) == sorted(record.chart),
+          "filled in, it is a record with the made-up one's 24 frames, not made up and claiming nothing")
+    for page in ("paired-shot.md", "paired-shot.th.md"):
+        rows = dict(re.findall(r"(?m)^\| (\d+) \|[^|]*\|\s*([^|]*?)\s*\|", (docs / page).read_text(encoding="utf-8")))
+        want = {str(f.n): "" if f.ev is None else measure._ev(f) for f in record.frames.values()}
+        check(rows == want, f"docs/{page} lists the same 24 frames at the same exposures")
 
     # ---- the made-up paired shot, from pictures and worked out
     worked = Distance(record, {f.n: madeup.reading(record, "canon", f) for f in record.charts()},
