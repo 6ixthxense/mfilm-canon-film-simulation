@@ -59,6 +59,8 @@ jobs:
         run: python ml-dev/filmos/sim/tonetest.py
       - name: A picture in the docs for every film on the shelf
         run: python ml-dev/films/pictures.py --list
+      - name: Every film stock's state on the pages, and no claim of a match
+        run: python ml-dev/films/states.py --check
       - name: The measuring command on a made-up paired shot
         run: python ml-dev/films/measuretest.py && python ml-dev/films/looktest.py
       - name: The look builder on made-up paired shots

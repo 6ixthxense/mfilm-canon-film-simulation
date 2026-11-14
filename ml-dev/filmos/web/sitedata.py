@@ -2,7 +2,8 @@
 """The website's data, from the files the README is made from, so the two never disagree:
 
   cameras.json   ml-dev/cameras.txt: every camera, its firmware, status and notes (English, Thai)
-  films.json     FILMS.md: the films on their four shelves, with each one's photo
+  films.json     FILMS.md: the films on their four shelves, with each one's photo, and each one's
+                 state from ml-dev/films/states.py (measured against the real film, or not yet)
   films/*.jpg    docs/films: the same RAW developed with each film
   app/*.jpg      docs/images/app-*.jpg: Darkrooms
 
@@ -45,6 +46,9 @@ def cameras():
 
 
 def films():
+    sys.path.insert(0, str(ROOT / "ml-dev/films"))
+    import states
+    state = states.states()
     text = (ROOT / "FILMS.md").read_text(encoding="utf-8")
     shelves = []
     for head, body in re.findall(r"^## (.+?)\n(.*?)(?=^## |\Z)", text, re.S | re.M):
@@ -54,9 +58,11 @@ def films():
                 r'<a href="docs/films/([\w-]+)\.jpg">.*?<b>(.*?)</b><br><sub>(.*?)</sub>', body):
             parts = [html.unescape(p.strip()) for p in sub.split("·")]
             iso = parts[0].replace("ISO", "").strip() if parts else ""
+            s = state[key]
             items.append({"key": key, "name": html.unescape(name), "iso": iso,
                           "process": parts[1] if len(parts) > 1 else "",
-                          "desc": " · ".join(parts[2:]) if len(parts) > 2 else ""})
+                          "desc": " · ".join(parts[2:]) if len(parts) > 2 else "",
+                          "state": s.kind, "state_en": states.line(s, "en"), "state_th": states.line(s, "th")})
         if items:
             shelves.append({"shelf": title, "films": items})
     return shelves

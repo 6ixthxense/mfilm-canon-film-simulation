@@ -208,6 +208,10 @@ grain, halation and softness; rolls come in 36, 24 or 12 frames.
 
 **[All 68 films, on the same photo →](FILMS.md)**
 
+<!-- film-states:start -->
+**None of the 68 film stocks is measured against the real film yet.** 65 are in the style of their film and not measured yet. 2 (Kodak HIE Infrared, Rollei Infrared 400) are impressions of infrared film: a Canon with its infrared filter in place does not record what that film does. 1 (CineStill 400T) is M-Film's own and stands for no real film. A film stock counts as measured when its colour and tone come within the pass marks of a lab scan of a roll of the real film, shot beside a Canon: [how a film stock becomes measured](docs/paired-shot.md). [Every film stock's state →](FILMS.md)
+<!-- film-states:end -->
+
 Colour for 59 of them comes from film emulation tables by [Pat David](https://patdavid.net),
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), taken from G'MIC through the [Film-Luts](https://github.com/YahiaAngelo/Film-Luts)
 collection; the rest from M-Film's own film models ([`ml-dev/films/films.py`](ml-dev/films/films.py)). The tables are

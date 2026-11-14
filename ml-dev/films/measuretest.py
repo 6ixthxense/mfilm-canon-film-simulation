@@ -157,6 +157,53 @@ def main():
         want = {str(f.n): "" if f.ev is None else measure._ev(f) for f in record.frames.values()}
         check(rows == want, f"docs/{page} lists the same 24 frames at the same exposures")
 
+    # ---- every film stock's state on the pages
+    import states
+    now = states.states()
+    kinds = [s.kind for s in now.values()]
+    check(len(now) == 68 and kinds.count("measured") == 0 and now["cinestill400t"].kind == "own" and now["hie"].kind == now["ir400"].kind == "impression"
+          and kinds.count("style") == 65,
+          "today no film stock is measured: 65 in the style of their film, 2 impressions of infrared film, 1 M-Film's own")
+    pages = states.render(now)
+    check(all(p.read_text(encoding="utf-8") == t for p, t in pages.items()) and not states.claims(now),
+          f"the {len(pages)} pages in the repository say so, and no text says a film stock matches its film")
+    refs = tmp / "refs"
+
+    def claim(name, key, expiry, numbers):
+        (refs / name).mkdir(parents=True)
+        (refs / name / "record.txt").write_text(
+            text.replace("made up: yes", "# made up: yes").replace("measured: no", "measured: yes").replace("paired shot: made-up", "paired shot: " + name)
+            .replace("film stock: gold200", "film stock: " + key).replace("film expiry: none, made up", "film expiry: " + expiry), encoding="utf-8")
+        (refs / name / "measured.txt").write_text(numbers, encoding="utf-8")
+
+    claim("gold200-1", "gold200", "2027-06", "# found when built\ncolour: 1.23 worst 4.50\ntone: 0.81 worst 2.20\n")
+    claim("hp5-1", "hp5", "2025-01", "tone: 1.40 worst 3.10\n")
+    then = states.states(refs)
+    said = states.render(then)
+    films_md, readme, readme_th = (said[HERE.parents[1] / n] for n in ("FILMS.md", "README.md", "README.th.md"))
+    check(then["gold200"].kind == then["hp5"].kind == "measured" and [s.kind for s in then.values()].count("style") == 63
+          and "<i>Measured against the film · colour 1.2, tone 0.8 · roll shot 2026-11-14, in date</i>" in films_md
+          and "<i>Measured against the film · tone 1.4 · roll shot 2026-11-14, expired</i>" in films_md
+          and "**2 of the 68 film stocks are measured against the real film:** Kodak Gold 200, Ilford HP5 Plus 400." in readme
+          and "**มี film stock 2 แบบจาก 68 แบบที่วัดเทียบกับฟิล์มจริงแล้ว:** Kodak Gold 200, Ilford HP5 Plus 400" in readme_th,
+          "two records that claim their film stocks change the pages with no hand edit: FILMS.md has their numbers, the roll's day "
+          "and whether it was in date; the READMEs count them, in English and Thai")
+    (refs / "hp5-1/measured.txt").unlink()
+    refused("a film stock claimed as measured with no numbers beside its record", lambda: states.states(refs), "measured.txt")
+    shutil.rmtree(refs / "hp5-1")
+    claim("own-1", "cinestill400t", "2027-06", "tone: 1.00 worst 2.00\n")
+    refused("M-Film's own film stock claimed as measured", lambda: states.states(refs), "stands for no real film")
+    root = tmp / "root"
+    for name in [p[0] for p in states.PAGES] + states.TEXTS:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HERE.parents[1] / name, root / name)
+    with open(root / "README.md", "a", encoding="utf-8") as f:
+        f.write("\nPortra 400 matches the real film.\n")
+    with open(root / "README.th.md", "a", encoding="utf-8") as f:
+        f.write("\nสีเหมือนฟิล์มจริงทุกม้วน\n")
+    found = states.claims(now, root)
+    check([n for n, _, _ in found] == ["README.md", "README.th.md"], "a line that says a film stock matches its film is found, in English and in Thai")
+
     # ---- the made-up paired shot, from pictures and worked out
     worked = Distance(record, {f.n: madeup.reading(record, "canon", f) for f in record.charts()},
                       {f.n: madeup.reading(record, "locked", f) for f in record.charts()})

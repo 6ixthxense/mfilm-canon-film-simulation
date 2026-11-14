@@ -92,6 +92,14 @@ belongs in the repository. Once the record says `measured: yes`, the shelf's tab
 baked from it (`ml-dev/filmos/tools/gentables.py`), in place of its table "in the style of" the film, and
 CI holds it to the pass marks.
 
+## What people read about a film stock
+
+`python3 ml-dev/films/states.py` writes every film stock's state onto the pages: a line under each picture in
+`FILMS.md`, and the count in both READMEs and the manual; the website takes it from the same place. A film
+stock is measured (with its numbers, the day its roll was shot and whether the roll was in date), in the
+style of its film, an impression (infrared film), or M-Film's own. Run it after a record changes; CI fails
+if the pages are not what it writes, or if a text says a film stock matches its film while none is measured.
+
 Tests, in `ml-dev/films`: `python3 measuretest.py`, `python3 looktest.py`, `python3 buildtest.py`. Needs
 numpy, scipy and Pillow.
 

@@ -145,8 +145,13 @@ def main():
                                                 .replace("film stock: gold200", "film stock: " + ("gold200" if name == "shot-a" else "portra400")),
                                                 encoding="utf-8")
     real = Built(Record(refs / "shot-a/record.txt"), shot, tmp / "real-out", draw=False)
-    check((refs / "shot-a/look.txt").exists() and real.written[-1] == refs / "shot-a/look.txt",
-          "for a paired shot that is not made up, the look's numbers are written beside its record")
+    import states
+    said = states.states(refs)[key]
+    g = real.distance.decides
+    check((refs / "shot-a/look.txt").exists() and (refs / "shot-a/measured.txt").exists() and said.kind == "measured"
+          and abs(said.colour[0] - g.colour.mean) < 0.01 and abs(said.tone[1] - g.tone.worst) < 0.01,
+          f"for a paired shot that is not made up, the look's numbers and its distance on the held-back frames are written beside "
+          f"its record, and the pages read them from there: {states.line(said)}")
     shutil.copy(refs / "shot-a/look.txt", refs / "shot-b/look.txt")
     cmd = [sys.executable, str(HERE.parent / "filmos/tools/gentables.py"), str(tmp / "tables"), "--films", str(measure.SIM / "FOSFILMS.BIN"),
            "--devtest", str(measure.SIM / "devtest"), "--plain", "--references"]

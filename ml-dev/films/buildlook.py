@@ -38,9 +38,11 @@ It writes, into --out (default: filmos/sim/out/references/<name>/built):
     LOOKnn.LUT   the film stock's table, as the camera and Darkrooms read it
     look.txt     the look's numbers, which the table is baked from
 
-and, for a paired shot that was shot, look.txt beside the record as well:
-that one belongs in the repository, and tools/gentables.py bakes the film
-stock's table from it once the record says "measured: yes".
+and, for a paired shot that was shot, look.txt beside the record as well,
+with measured.txt, the distance on the held-back frames. Those two belong in
+the repository: once the record says "measured: yes", tools/gentables.py
+bakes the film stock's table from look.txt, and states.py puts the numbers
+on the pages.
 
 Needs numpy, scipy and Pillow, and the simulator's devtest.
 """
@@ -233,6 +235,16 @@ class Built:
         self.written = [out / "look.txt"] + ([] if record.made_up else [record.path.with_name("look.txt")])
         for path in self.written:
             filmshape.save(path, self.look, about)
+        if not record.made_up:
+            # what the pages say of a measured film stock (states.py)
+            g = self.distance.decides
+            lines = ["# What measure.py look found on the held-back frames when this look was built (films/buildlook.py)."]
+            if g.colour is not None and g.colour.n:
+                lines.append("colour: %.2f worst %.2f" % (g.colour.mean, g.colour.worst))
+            if g.tone.n:
+                lines.append("tone: %.2f worst %.2f" % (g.tone.mean, g.tone.worst))
+            self.written.append(record.path.with_name("measured.txt"))
+            self.written[-1].write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     @property
     def state(self):

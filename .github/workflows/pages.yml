@@ -6,7 +6,7 @@ name: mfilm.app
 on:
   push:
     branches: ["main"]
-    paths: ["site/**", "ml-dev/filmos/**", "ml-dev/films/**", "VERSION", ".github/workflows/pages.yml"]
+    paths: ["site/**", "ml-dev/filmos/**", "ml-dev/films/**", "ml-dev/references/**", "FILMS.md", "VERSION", ".github/workflows/pages.yml"]
   pull_request:
     paths: ["site/**", "ml-dev/filmos/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
