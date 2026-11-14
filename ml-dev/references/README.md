@@ -65,6 +65,10 @@ python3 madeup.py /tmp/shot
 python3 measure.py compare ../references/made-up/record.txt canon=/tmp/shot/canon locked=/tmp/shot/locked
 ```
 
+`python3 ml-dev/films/measure.py darkrooms <folder>` is the standing check that Darkrooms and the darkroom
+give the same picture of the sample RAW; [DEVELOPING.md](../DEVELOPING.md) has it, with the steps both
+have to take.
+
 `compare` is the second half alone: a record and two sets of pictures of its frames, the look first and
 what it is held against second. It serves one scan against another, and the darkroom against Darkrooms.
 Here it holds a plain print of the chart against the made-up film, which is far outside the pass marks, as
