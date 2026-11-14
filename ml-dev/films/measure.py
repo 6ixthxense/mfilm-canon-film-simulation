@@ -4,6 +4,7 @@
     python3 measure.py look [RECORD ...]                the look of every film stock that has a reference
     python3 measure.py compare RECORD SET=DIR SET=DIR   two sets of pictures of the same frames
     python3 measure.py read RECORD SET=DIR              a set's chart patches, as a file for the repository
+    python3 measure.py darkrooms DIR                    Darkrooms' pictures of the sample RAW against the darkroom's
 
 look develops the Canon frames of a paired shot with the darkroom's own code
 built for a computer (devtest), with the film stock's table, and holds the
@@ -30,6 +31,16 @@ highlights and no grain, which a made-up film does not have: a real film
 stock is measured with both on. look fails if a film stock whose record claims it
 as measured ("measured: yes") is outside a pass mark; the others are only
 reported.
+
+darkrooms is the standing check that the two developers give the same
+picture (#132). DIR holds Darkrooms' pictures of one RAW frame (--raw,
+default the sample, films/sample/SAMPLE.CR2), one a film stock, named by it:
+gold200.jpg. For each of the first film stocks (--films for others) the
+darkroom develops the same frame at its Large size, both pictures are
+reduced to 30 x 20 blocks of light, and the blocks compared: plain dE2000,
+the mean and the worst block, against SAME. It fails if a film stock is
+outside or has no picture. Darkrooms is closed source: its pictures come
+here, and only numbers go back.
 
 compare is the second half alone. RECORD is the record of a paired shot (../references/<name>/record.txt; the
 made-up one is the example of the format). Each SET=DIR is one set of
@@ -95,6 +106,12 @@ GREYS = list(range(18, 24))
 MID_GREY = 21                           # neutral 5: the patch the scanner's exposure is set on
 
 PASS = {"colour": 3.0, "tone": 3.0}     # the pass marks, on the mean. Provisional (#101, #117)
+SAME = {"mean": 1.0, "worst": 3.0}      # how far Darkrooms' picture of a frame may be from the darkroom's: plain dE2000. Provisional (#121)
+# the blocks two developers' pictures of one frame are compared in. Large enough that grain and a pixel's shift at
+# an edge drop out: the darkroom's own Large print against its Medium is 0.33 on the mean and 1.31 at the worst
+BLOCKS = (30, 20)
+FIRST = ["portra400", "gold200", "ektar100", "velvia50", "cinestill800t", "hp5", "pro400h"]     # the first film stocks to be measured
+SAMPLE = HERE / "sample/SAMPLE.CR2"
 WORST = 2.0                             # the worst patch may be this many times the pass mark
 # of the picture's range. Blown: any of a patch's three colours at or above BLOWN. Black: all three at or
 # under BLACK (one colour at nothing is what a strong colour looks like in sRGB, the chart's cyan for one)
@@ -647,6 +664,22 @@ class Darkroom:
         # beside links, by short names: the darkroom keeps paths in 128 bytes, as on a card
         os.symlink(self.tables, Path(self.tmp.name) / "T")
 
+    def picture(self, raw, size=2):
+        """A RAW frame as the darkroom prints it for the photographer, with its own exposure: size 0 Small, 1 Medium, 2 Large."""
+        tmp = Path(self.tmp.name)
+        for name in ("f.CR2", "p.jpg"):
+            (tmp / name).unlink(missing_ok=True)
+        os.symlink(Path(raw).resolve(), tmp / "f.CR2")
+        env = dict(os.environ, FOS_FILMS=str(self.films), FOS_LUT_DIR="T", FOS_JPEG="p.jpg")
+        for name in ("FOS_EV", "FOS_BARE", "FOS_DUMP_LIN", "FOS_DUMP_CUT", "FOS_SIZE"):
+            env.pop(name, None)
+        if size:
+            env["FOS_SIZE"] = str(size)
+        r = subprocess.run([str(self.devtest), "-f", self.key, "f.CR2", "o.fop"], cwd=tmp, env=env, capture_output=True, text=True)
+        if r.returncode or not (tmp / "p.jpg").exists():
+            raise Bad(f"the darkroom did not develop {raw} with {self.key}: {(r.stderr or r.stdout).strip().splitlines()[-1:]}")
+        return read_picture(tmp / "p.jpg")
+
     def develop(self, raw, corners, ev=None, dump=False):
         """The chart in a RAW frame as the darkroom prints it; ev: the scanner's exposure held there, in stops
         (None: the darkroom's own). Returns the reading and the exposure the scanner would have picked."""
@@ -773,6 +806,51 @@ class Look:
         return "\n".join(out)
 
 
+# ---------------------------------------------------------------- two developers, one frame
+
+def blocks(pix, what="the picture"):
+    """A picture as BLOCKS blocks of CIELAB, each the mean of its light: grain and the picture's size drop out."""
+    h, w = pix.shape[:2]
+    if w < h:
+        raise Bad(f"{what}: an upright picture. The check is on a frame held level")
+    if abs(w / h - BLOCKS[0] / BLOCKS[1]) > 0.02 or w < 4 * BLOCKS[0]:
+        raise Bad(f"{what}: {w} x {h} is not a whole frame, three wide to two high and {4 * BLOCKS[0]} wide or more")
+    lin = to_lin(pix)
+    xs, ys = (np.linspace(0, n, k + 1).round().astype(int)[:-1] for n, k in ((w, BLOCKS[0]), (h, BLOCKS[1])))
+    sums = np.add.reduceat(np.add.reduceat(lin, ys, 0), xs, 1)
+    count = np.diff(np.append(ys, h))[:, None] * np.diff(np.append(xs, w))[None, :]
+    return lab(sums / count[..., None])
+
+
+def same_picture(a, b, what_a="the first picture", what_b="the second"):
+    """How far apart two pictures of one frame are: plain dE2000 over their blocks: (mean, worst, where the worst
+    is, as fractions across and down)."""
+    de = de2000(blocks(a, what_a), blocks(b, what_b))
+    y, x = np.unravel_index(int(de.argmax()), de.shape)
+    return float(de.mean()), float(de.max()), ((x + 0.5) / BLOCKS[0], (y + 0.5) / BLOCKS[1])
+
+
+def darkrooms(folder, raw=SAMPLE, keys=FIRST, devtest=None, films_list=None, tables=None):
+    """Darkrooms' pictures of a frame in folder, each against the darkroom's: [(film stock, mean, worst, where)],
+    with None for the numbers where there is no picture."""
+    import films
+    folder, out = Path(folder), []
+    if not folder.is_dir():
+        raise Bad(f"{folder}: not a folder of pictures")
+    for key in keys:
+        if key not in films.FILMS:
+            raise Bad(f"film stock \"{key}\" is not on the shelf (films.py)")
+        hits = [p for p in sorted(folder.iterdir()) if p.stem == key and p.suffix.lower() in EXT]
+        if len(hits) > 1:
+            raise Bad(f"{folder}: more than one picture for {key}: {', '.join(p.name for p in hits)}")
+        if not hits:
+            out.append((key, None, None, None))
+            continue
+        mine = Darkroom(key, devtest, films_list, tables).picture(raw)
+        out.append((key,) + same_picture(mine, read_picture(hits[0]), f"the darkroom's picture with {key}", str(hits[0])))
+    return out
+
+
 def _ev(f):
     return "0" if not f.ev else f"{f.ev:+g}".replace("-", "−")
 
@@ -837,6 +915,12 @@ def main():
     k.add_argument("--films", help="the film list devtest reads (default: filmos/sim/out/FOSFILMS.BIN)")
     k.add_argument("--tables", help="the film stocks' tables (default: filmos/sim/out/tables; a made-up paired shot: the made-up film)")
     k.add_argument("--mkcr2", help="for a made-up paired shot's frames (default: filmos/sim/out/mkcr2)")
+    dr = sub.add_parser("darkrooms", help="Darkrooms' pictures of a RAW frame against the darkroom's")
+    dr.add_argument("folder", help="Darkrooms' pictures, named by film stock: gold200.jpg")
+    dr.add_argument("--raw", default=str(SAMPLE), help="the frame both developed (default: films/sample/SAMPLE.CR2)")
+    dr.add_argument("--films", default=",".join(FIRST), help="the film stocks, with commas (default: the first set)")
+    dr.add_argument("--devtest")
+    dr.add_argument("--tables")
     rd = sub.add_parser("read", help="a set's chart patches, written beside the record as SET.txt")
     rd.add_argument("record")
     rd.add_argument("set", metavar="SET=DIR")
@@ -859,6 +943,26 @@ def main():
                     failed.append(record.film["name"])
             if failed:
                 sys.exit(f"measure: claimed as measured and outside a pass mark: {', '.join(failed)}")
+            return
+        if a.cmd == "darkrooms":
+            import films
+            got = darkrooms(a.folder, a.raw, [k for k in a.films.split(",") if k], a.devtest, None, a.tables)
+            print(f"Darkrooms against the darkroom, on {Path(a.raw).name}: plain dE2000 over {BLOCKS[0]} x {BLOCKS[1]} blocks "
+                  f"(the same picture: {SAME['mean']:g} on the mean, {SAME['worst']:g} at the worst block)")
+            bad = []
+            for key, mean, worst, where in got:
+                name = films.FILMS[key]["name"]
+                if mean is None:
+                    print(f"  {name:22} no picture ({key}.jpg)")
+                    bad.append(name)
+                    continue
+                ok = mean <= SAME["mean"] and worst <= SAME["worst"]
+                print(f"  {name:22} mean {mean:5.2f}   worst {worst:5.2f} ({where[0]:.0%} across, {where[1]:.0%} down)   "
+                      + ("the same picture" if ok else "NOT the same picture"))
+                if not ok:
+                    bad.append(name)
+            if bad:
+                sys.exit(f"measure: Darkrooms and the darkroom differ, or a picture is missing: {', '.join(bad)}")
             return
         sets = []
         for s in ([a.set] if a.cmd == "read" else [a.look, a.against]):

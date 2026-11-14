@@ -20,6 +20,8 @@ away as that film is, which is worked out here with no picture. Checks:
     fetched, a scan's patches kept as a file stand in for the scan
   - the darkroom's own exposure against the automatic scan is printed, and
     decides nothing
+  - measure.py darkrooms: two pictures of the sample RAW are the same
+    picture or not (the darkroom at another size stands in for Darkrooms)
 
 Needs numpy and Pillow, and the simulator's devtest, mkcr2 and film list.
 """
@@ -225,6 +227,29 @@ def main():
     r = Look(Record(kept.path), shot, tables=own)
     check(max(abs(a - b) for a, b in zip(numbers(r.distance.decides), base)) < 0.01,
           "with the patches kept, the scan's pictures are not needed: the same numbers without them")
+
+    # ---- Darkrooms against the darkroom, on the sample RAW. (Darkrooms is not here: the darkroom at another size stands in.)
+    from PIL import Image
+    dr = tmp / "darkrooms"
+    dr.mkdir()
+    save = lambda pix, name: Image.fromarray(np.rint(pix * 255).astype(np.uint8)).save(dr / name, quality=92)     # noqa: E731
+    medium = measure.Darkroom(key).picture(measure.SAMPLE, 1)
+    save(medium, key + ".jpg")
+    cmd = [sys.executable, str(HERE / "measure.py"), "darkrooms", str(dr), "--films"]
+    r = subprocess.run(cmd + [key], capture_output=True, text=True)
+    mean, worst, _ = measure.same_picture(measure.Darkroom(key).picture(measure.SAMPLE), medium)
+    check(r.returncode == 0 and "the same picture" in r.stdout and "NOT" not in r.stdout and mean < 0.6 and worst < 2,
+          f"the sample RAW by the darkroom at two sizes is the same picture: {mean:.2f} on the mean, {worst:.2f} at the worst block "
+          f"(limit {measure.SAME['mean']:g} and {measure.SAME['worst']:g})")
+    save(measure.Darkroom("portra400").picture(measure.SAMPLE, 1), key + ".jpg")
+    r = subprocess.run(cmd + [key], capture_output=True, text=True)
+    check(r.returncode == 1 and "NOT the same picture" in r.stdout and "Kodak Gold 200" in r.stderr,
+          f"with another film stock's picture in its place the command fails: {r.stdout.strip().splitlines()[-1].strip()[:80]}")
+    r = subprocess.run(cmd + [key + ",hp5"], capture_output=True, text=True)
+    check(r.returncode == 1 and "no picture (hp5.jpg)" in r.stdout, "a film stock with no picture fails it too")
+    save(medium[:, :1200], key + ".jpg")
+    r = subprocess.run(cmd + [key], capture_output=True, text=True)
+    check(r.returncode == 1 and "not a whole frame" in r.stderr, "a picture that is not the whole frame is refused")
 
     shutil.rmtree(tmp, ignore_errors=True)
     sys.exit(1 if fail else 0)

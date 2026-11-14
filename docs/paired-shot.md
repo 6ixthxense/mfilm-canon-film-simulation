@@ -50,7 +50,8 @@ The light must not change while you shoot. If a cloud comes, wait.
 - Every other exposure is counted from 0 **with the shutter speed, never the aperture**. One stop is
   two half-stop steps: +1 is two steps slower, −1 two steps faster, +0.5 one step slower.
   The half-stop speeds: 1/8000, 1/6000, 1/4000, 1/3000, 1/2000, 1/1500, 1/1000, 1/750, 1/500, 1/350,
-  1/250, 1/180, 1/125, 1/90, 1/60, 1/45, 1/30, 1/20, 1/15.
+  1/250, 1/180, 1/125, 1/90, 1/60, 1/45, 1/30, 1/20, 1/15. If your camera shows other numbers, count
+  the steps.
 - Write the 24 shutter speeds on the card before you start.
 
 ## 4. The 24 frames
