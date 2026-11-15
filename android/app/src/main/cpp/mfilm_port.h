@@ -53,6 +53,15 @@ void mf_draw_canister(int film, int exposures, int leader, uint32_t *argb, int w
 void mf_load_roll(int film, int exposures);
 void mf_rewind_roll(void);
 int  mf_roll_frames(char *out, int out_size);
+int  mf_get_setting(int id);
+void mf_set_setting(int id, int val);
+void mf_set_shot_fstop(int fstop_x100);
+int  mf_lab_rolls(char *out, int out_size);
+int  mf_lab_roll_prints(int roll_no, char *out, int out_size);
+int  mf_dev_open(int roll_no, int size);
+int  mf_dev_step(int budget_ms, int out[3]);
+int  mf_dev_preview_bmp(uint32_t *argb, int w, int h);
+void mf_dev_close(void);
 const char *mf_card(void);
 
 /* a CR2 shaped like the EOS M's (the whole 18 MP sensor) from a photo:

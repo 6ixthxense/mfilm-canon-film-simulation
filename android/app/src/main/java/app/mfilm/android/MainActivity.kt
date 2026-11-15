@@ -10,7 +10,11 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
-import android.media.MediaActionSound
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.BatteryManager
 import android.os.Bundle
 import android.util.Log
@@ -74,12 +78,20 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val captureExecutor = Executors.newSingleThreadExecutor()
-    private val sound = MediaActionSound()
+    private val soundExecutor = Executors.newSingleThreadExecutor()
     private val ev = IntArray(3)
     private val roll = IntArray(5)
     private var running = false
     private var uiUp = true
     private var volumeDown = false
+    private val bwFilms by lazy {
+        val n = Native.filmCount()
+        val info = IntArray(6)
+        (0 until n).mapNotNull { i ->
+            val name = Native.filmInfo(i, info)
+            if (info[1] == 2) name else null
+        }.toSet()
+    }
 
     private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) startCamera() else Toast.makeText(this, "M-Film needs the camera to shoot", Toast.LENGTH_LONG).show()
@@ -95,7 +107,6 @@ class MainActivity : ComponentActivity() {
             scaleType = PreviewView.ScaleType.FILL_CENTER
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
-        sound.load(MediaActionSound.SHUTTER_CLICK)
 
         card = Card(this)
         if (!Native.started()) {
@@ -117,7 +128,11 @@ class MainActivity : ComponentActivity() {
         // turned round, the activity starts again: the film OS carries on where it was
         uiUp = Native.uiRunning()
         ui.filmOs = uiUp
-        ui.leftHanded = getPreferences(MODE_PRIVATE).getBoolean("left_handed", false)
+        val prefs = getPreferences(MODE_PRIVATE)
+        ui.leftHanded = prefs.getBoolean("left_handed", false)
+        ui.cleanFinder = prefs.getBoolean("clean_finder", false)
+        ui.bwPreview = prefs.getBoolean("bw_preview", true)
+        ui.realisticWind = Native.getSetting(Native.SET_WIND) != 0
         updateLabel()
         val tap = { k: Int -> Native.key(k); Native.key(k or Native.RELEASE) }
         val actions = Actions(
@@ -129,9 +144,10 @@ class MainActivity : ComponentActivity() {
             zoom = ::setZoom,
             film = { ui.route = Route.SHELF },
             counter = { ui.route = Route.ROLL },
-            prints = { Native.openScreen(Native.OPEN_PRINTS) },
-            darkroom = { Native.openScreen(Native.OPEN_DARKROOM) },
-            wind = { tap(Native.K_SET) },
+            prints = { ui.printsRoll = -1; ui.route = Route.PRINTS },
+            darkroom = { ui.route = Route.DARKROOM },
+            settings = { ui.route = Route.SETTINGS },
+            wind = { playWindSound(); tap(Native.K_SET) },
             key = tap,
         )
         setContent {
@@ -155,6 +171,37 @@ class MainActivity : ComponentActivity() {
                         ui.route = Route.CAMERA
                     },
                     onShelf = { ui.route = Route.SHELF },
+                    onBack = { ui.route = Route.CAMERA },
+                )
+                Route.DARKROOM -> DarkroomScreen(
+                    onDevelop = { rollNo, size -> DevelopService.start(this, rollNo, size) },
+                    onCancel = { DevelopService.stop(this) },
+                    onOpenPrints = { rollNo -> ui.printsRoll = rollNo; ui.route = Route.PRINTS },
+                    onBack = { updateLabel(); ui.route = Route.CAMERA },
+                )
+                Route.PRINTS -> PrintsScreen(
+                    initialRoll = ui.printsRoll,
+                    onBack = { ui.route = Route.CAMERA },
+                )
+                Route.SETTINGS -> SettingsScreen(
+                    ui = ui,
+                    onToggleWind = {
+                        ui.realisticWind = !ui.realisticWind
+                        Native.setSetting(Native.SET_WIND, if (ui.realisticWind) 1 else 0)
+                        updateLabel()
+                    },
+                    onToggleFinder = {
+                        ui.cleanFinder = !ui.cleanFinder
+                        prefs.edit().putBoolean("clean_finder", ui.cleanFinder).apply()
+                    },
+                    onToggleBwPreview = {
+                        ui.bwPreview = !ui.bwPreview
+                        prefs.edit().putBoolean("bw_preview", ui.bwPreview).apply()
+                    },
+                    onToggleHand = {
+                        ui.leftHanded = !ui.leftHanded
+                        prefs.edit().putBoolean("left_handed", ui.leftHanded).apply()
+                    },
                     onBack = { ui.route = Route.CAMERA },
                 )
             }
@@ -273,6 +320,7 @@ class MainActivity : ComponentActivity() {
                 camera = provider.bindToLifecycle(this, back, pv, ic).also {
                     exposureScale(it)
                     zoomScale(it)
+                    readAperture()
                 }
                 imageCapture = ic
                 Log.i(Card.TAG, if (rawCapture) "camera: RAW (DNG)" else "camera: no RAW, photos made into CR2s")
@@ -338,7 +386,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         ic.targetRotation = held
-        sound.play(MediaActionSound.SHUTTER_CLICK)
+        playShutterSound()
         screen.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         if (rawCapture) {
             // straight to the card; the roll counts it once it is all there
@@ -434,7 +482,60 @@ class MainActivity : ComponentActivity() {
         ui.exposures = roll[2]
         ui.needWind = roll[3] != 0
         ui.iso = roll[4]
+        ui.isBwFilm = ui.loaded && ui.film in bwFilms
         ui.pendingRolls = Native.pendingRolls()
+    }
+
+    private fun readAperture() {
+        try {
+            val cm = getSystemService(CAMERA_SERVICE) as CameraManager
+            for (id in cm.cameraIdList) {
+                val c = cm.getCameraCharacteristics(id)
+                if (c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
+                    val ap = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.firstOrNull()
+                    if (ap != null && ap > 0f) Native.setShotFstop((ap * 100f).toInt())
+                    break
+                }
+            }
+        } catch (_: Throwable) { }
+    }
+
+    private fun playShutterSound() = playTone(shortArrayOf(28000, -24000, 14000, -8000), 44100, 48)
+    private fun playWindSound() = playTone(shortArrayOf(12000, -10000, 0, 0, 10000, -9000, 0, 0, 9000, -7000), 22050, 80)
+
+    private fun playTone(pattern: ShortArray, sampleRate: Int, ms: Int) {
+        soundExecutor.execute {
+            try {
+                val n = sampleRate * ms / 1000
+                val buf = ShortArray(n)
+                for (i in 0 until n) {
+                    val env = 1f - i.toFloat() / n
+                    val p = pattern[i % pattern.size]
+                    buf[i] = (p * env).toInt().toShort()
+                }
+                val track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .setBufferSizeInBytes(buf.size * 2)
+                    .build()
+                track.write(buf, 0, buf.size)
+                track.play()
+                Thread.sleep(ms.toLong() + 30)
+                track.release()
+            } catch (_: Throwable) { }
+        }
     }
 
     private fun about() {
@@ -489,6 +590,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        sound.release()
+        soundExecutor.shutdownNow()
     }
 }
