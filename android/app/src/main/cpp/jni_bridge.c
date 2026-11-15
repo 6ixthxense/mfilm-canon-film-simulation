@@ -39,7 +39,7 @@ JNIEXPORT jboolean JNICALL FN(started)(JNIEnv *env, jclass cls) { return started
 JNIEXPORT void JNICALL FN(key)(JNIEnv *env, jclass cls, jint k) { mf_key(k); }
 JNIEXPORT void JNICALL FN(half)(JNIEnv *env, jclass cls, jboolean down) { mf_half(down); }
 JNIEXPORT void JNICALL FN(shutter)(JNIEnv *env, jclass cls) { mf_shutter(); }
-JNIEXPORT void JNICALL FN(shotDone)(JNIEnv *env, jclass cls, jboolean ok) { mf_shot_done(ok); }
+JNIEXPORT void JNICALL FN(shotDone)(JNIEnv *env, jclass cls, jboolean ok, jboolean dng) { mf_shot_done(ok, dng); }
 JNIEXPORT void JNICALL FN(setPending)(JNIEnv *env, jclass cls, jint n) { mf_set_pending(n); }
 JNIEXPORT void JNICALL FN(openScreen)(JNIEnv *env, jclass cls, jint screen) { mf_open(screen); }
 JNIEXPORT void JNICALL FN(battery)(JNIEnv *env, jclass cls, jint pct) { mf_battery(pct); }
@@ -80,11 +80,74 @@ JNIEXPORT jboolean JNICALL FN(frame)(JNIEnv *env, jclass cls, jobject bitmap, jb
 /* out: loaded, shot, exposures; returns the film's name */
 JNIEXPORT jstring JNICALL FN(rollInfo)(JNIEnv *env, jclass cls, jintArray out)
 {
-    int r[3];
+    int r[5];
     char film[64];
-    mf_roll_info(&r[0], &r[1], &r[2], film, sizeof(film));
-    (*env)->SetIntArrayRegion(env, out, 0, 3, r);
+    mf_roll_info(r, film, sizeof(film));
+    (*env)->SetIntArrayRegion(env, out, 0, 5, r);
     return (*env)->NewStringUTF(env, film);
+}
+
+JNIEXPORT jint JNICALL FN(pendingRolls)(JNIEnv *env, jclass cls)
+{
+    return mf_pending_rolls();
+}
+
+JNIEXPORT jint JNICALL FN(filmCount)(JNIEnv *env, jclass cls)
+{
+    return mf_film_count();
+}
+
+JNIEXPORT jstring JNICALL FN(filmInfo)(JNIEnv *env, jclass cls, jint idx, jintArray out)
+{
+    int r[6];
+    char name[64];
+    mf_film_info(idx, r, name, sizeof(name));
+    (*env)->SetIntArrayRegion(env, out, 0, 6, r);
+    return (*env)->NewStringUTF(env, name);
+}
+
+JNIEXPORT void JNICALL FN(drawCanister)(JNIEnv *env, jclass cls, jint film, jint exposures, jint leader, jobject bitmap)
+{
+    AndroidBitmapInfo info;
+    void *px;
+    if (AndroidBitmap_getInfo(env, bitmap, &info) < 0 ||
+        info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || AndroidBitmap_lockPixels(env, bitmap, &px) < 0)
+        return;
+    int w = (int) info.width, h = (int) info.height;
+    uint32_t *buf = malloc((size_t) w * h * 4);
+    if (buf)
+    {
+        mf_draw_canister(film, exposures, leader, buf, w, h);
+        for (int y = 0; y < h; y++)
+        {
+            uint32_t *row = (uint32_t *) ((uint8_t *) px + (size_t) y * info.stride);
+            const uint32_t *src = buf + y * w;
+            for (int x = 0; x < w; x++)
+            {
+                uint32_t c = src[x];
+                row[x] = (c & 0xFF00FF00u) | (c >> 16 & 0xFF) | (c & 0xFF) << 16;
+            }
+        }
+        free(buf);
+    }
+    AndroidBitmap_unlockPixels(env, bitmap);
+}
+
+JNIEXPORT void JNICALL FN(loadRoll)(JNIEnv *env, jclass cls, jint film, jint exposures)
+{
+    mf_load_roll(film, exposures);
+}
+
+JNIEXPORT void JNICALL FN(rewindRoll)(JNIEnv *env, jclass cls)
+{
+    mf_rewind_roll();
+}
+
+JNIEXPORT jstring JNICALL FN(rollFrames)(JNIEnv *env, jclass cls)
+{
+    char buf[4096];
+    mf_roll_frames(buf, sizeof(buf));
+    return (*env)->NewStringUTF(env, buf);
 }
 
 JNIEXPORT jint JNICALL FN(makeCr2)(JNIEnv *env, jclass cls, jstring path, jintArray argb, jint w, jint h, jint seed)

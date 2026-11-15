@@ -49,7 +49,8 @@ object Native {
     @JvmStatic external fun key(k: Int)
     @JvmStatic external fun half(down: Boolean)
     @JvmStatic external fun shutter()
-    @JvmStatic external fun shotDone(ok: Boolean)
+    /** the frame asked for was taken (or not); dng: it is the phone's RAW, IMG_nnnn.DNG, not a CR2 */
+    @JvmStatic external fun shotDone(ok: Boolean, dng: Boolean)
     @JvmStatic external fun setPending(n: Int)
     @JvmStatic external fun openScreen(screen: Int)
     @JvmStatic external fun battery(percent: Int)
@@ -58,8 +59,18 @@ object Native {
     @JvmStatic external fun pollEvent(out: IntArray): Boolean
     /** the screen into a 720 x 480 ARGB_8888 bitmap; true if it changed */
     @JvmStatic external fun frame(bitmap: Bitmap, force: Boolean): Boolean
-    /** out: loaded, shot, exposures; returns the film's name */
+    const val OPEN_END = 5
+
+    /** out (5): loaded, shot, exposures, needs winding on, the film's ISO; returns the film's name */
     @JvmStatic external fun rollInfo(out: IntArray): String
+    @JvmStatic external fun pendingRolls(): Int
+    @JvmStatic external fun filmCount(): Int
+    /** out (6): iso, group, grain, punch, colour, warmth; returns film name */
+    @JvmStatic external fun filmInfo(idx: Int, out: IntArray): String
+    @JvmStatic external fun drawCanister(film: Int, exposures: Int, leader: Int, bitmap: Bitmap)
+    @JvmStatic external fun loadRoll(film: Int, exposures: Int)
+    @JvmStatic external fun rewindRoll()
+    @JvmStatic external fun rollFrames(): String
     /** argb: sRGB pixels, w x h; 0 on success */
     @JvmStatic external fun makeCr2(path: String, argb: IntArray, w: Int, h: Int, seed: Int): Int
 }

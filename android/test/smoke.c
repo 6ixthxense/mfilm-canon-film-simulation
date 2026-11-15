@@ -35,7 +35,7 @@ static void events(void)
             char path[600];
             snprintf(path, sizeof(path), "%sDCIM/100CANON/IMG_%04d.CR2", mf_card(), a);
             mf_set_pending(1);
-            mf_shot_done(1);
+            mf_shot_done(1, 0);
             int r = mf_make_cr2(path, img, W, H, a);
             mf_set_pending(0);
             free(img);
@@ -83,9 +83,9 @@ int main(int argc, char **argv)
         else if (c[0] == 'd') dump(c + 1);
         else if (c[0] == 'h') mf_half(c[1] == '1');
     }
-    int loaded, shot, exp;
+    int r[5];
     char film[64];
-    mf_roll_info(&loaded, &shot, &exp, film, sizeof(film));
-    printf("roll: loaded %d, %d/%d, %s; shots %d\n", loaded, shot, exp, film, shots);
+    mf_roll_info(r, film, sizeof(film));
+    printf("roll: loaded %d, %d/%d, %s; shots %d\n", r[0], r[1], r[2], film, shots);
     return 0;
 }

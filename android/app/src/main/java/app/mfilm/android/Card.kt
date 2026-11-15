@@ -62,6 +62,21 @@ class Card(private val context: Context) {
         enqueue(file)
     }
 
+    /** where the sensor's RAW of frame `number` is written while it is being written; counted as pending until rawDone */
+    fun rawPart(number: Int): File {
+        Native.setPending(queued.incrementAndGet())
+        return File(dcim, "IMG_%04d.DNG.part".format(number))
+    }
+
+    /** the RAW written (ok) or not: IMG_nnnn.DNG on the card, or nothing. Whether it is there */
+    fun rawDone(part: File, ok: Boolean): Boolean {
+        val dng = File(part.path.removeSuffix(".part"))
+        val there = ok && part.length() > 0 && part.renameTo(dng)
+        if (!there) part.delete()
+        Native.setPending(queued.decrementAndGet())
+        return there
+    }
+
     /** frames left from before (the app closed while writing them) */
     fun resumePending() {
         pending.listFiles { f -> f.name.endsWith(".JPG") }?.sortedBy { it.name }?.forEach { enqueue(it) }

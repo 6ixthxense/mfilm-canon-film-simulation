@@ -36,10 +36,10 @@ clean:
 	rm -rf out
 
 # developing film: ./out/devtest [-f film] [-r raw.u16] in.CR2 out.FOP out.ppm
-DEV = devtest.c port_files.c films.c ../fos_dev.c ../fos_print.c ../fos_looks.c ../fos_film.c ../fos_gfx.c ../fos_jpeg.c
+DEV = devtest.c port_files.c films.c ../fos_dev.c ../fos_dng.c ../fos_print.c ../fos_looks.c ../fos_film.c ../fos_gfx.c ../fos_jpeg.c
 out/devtest: $(DEV) ../*.h out/FOSFILMS.BIN
 	mkdir -p out
-	$(CC) $(CFLAGS) -DFOS_DEV_TEST -o $@ $(DEV) -lm
+	$(CC) $(CFLAGS) -DFOS_DEV_TEST -DFOS_DEV_RAWIN -o $@ $(DEV) -lm
 
 # test CR2 files (mkcard.sh builds its own; colourtest.py wants this one)
 out/mkcr2: tools/mkcr2.c

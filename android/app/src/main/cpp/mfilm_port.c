@@ -170,7 +170,7 @@ static void scan_card(void)
     while ((e = readdir(d)))
     {
         int n;
-        if (sscanf(e->d_name, "IMG_%4d.CR2", &n) == 1 && n > file_no) file_no = n;
+        if (sscanf(e->d_name, "IMG_%4d.", &n) == 1 && n > file_no) file_no = n;     /* .CR2 or .DNG */
         if (sscanf(e->d_name, "ROLL_%3d.TXT", &n) == 1 && n > roll.number) roll.number = n;
     }
     closedir(d);
@@ -211,7 +211,12 @@ void mf_half(int down)
 }
 
 void mf_shutter(void) { pthread_mutex_lock(&in_lock); shutter_req = 1; pthread_mutex_unlock(&in_lock); }
-void mf_shot_done(int ok) { pthread_mutex_lock(&in_lock); shot_done_req = ok ? 1 : -1; pthread_mutex_unlock(&in_lock); }
+void mf_shot_done(int ok, int dng)
+{
+    pthread_mutex_lock(&in_lock);
+    shot_done_req = !ok ? -1 : dng ? 2 : 1;
+    pthread_mutex_unlock(&in_lock);
+}
 void mf_open(int screen_) { pthread_mutex_lock(&in_lock); if (!ui_running) open_req = screen_; pthread_mutex_unlock(&in_lock); }
 void mf_battery(int percent) { battery = percent < 0 ? 0 : percent > 100 ? 100 : percent; }
 int  mf_ui_running(void) { return ui_running; }
@@ -371,14 +376,15 @@ const char *fos_port_version() { return MFILM_VERSION; }
 
 static int leds_until, end_due;
 
-static void shot_end(void)
+/* dng: the phone's own RAW (IMG_nnnn.DNG), or a CR2 made from its photo */
+static void shot_end(int dng)
 {
     file_no++;
     roll.shot++;
     char when[20], aperture[8], line[112];
     clock_str(when, sizeof(when), 1);
     fos_format_fstop(aperture, sizeof(aperture), settings[FS_FSTOP]);
-    snprintf(line, sizeof(line), "%d  IMG_%04d.CR2  %s:00  f/%s\n", roll.shot, file_no, when, aperture);
+    snprintf(line, sizeof(line), "%d  IMG_%04d.%s  %s:00  f/%s\n", roll.shot, file_no, dng ? "DNG" : "CR2", when, aperture);
     log_append(line);
 
     memmove(&roll.recent[1], &roll.recent[0], sizeof(roll.recent[0]) * (FOS_RECENT - 1));
@@ -398,13 +404,112 @@ static void shot_end(void)
     }
 }
 
-void mf_roll_info(int *loaded, int *shot, int *exposures, char *film, int film_size)
+void mf_roll_info(int out[5], char *film, int film_size)
 {
     /* read from another thread: a snapshot good enough for a label */
     struct fos_roll r = roll;
-    *loaded = r.loaded; *shot = r.shot; *exposures = r.exposures;
+    int known = r.loaded && r.film >= 0 && r.film < fos_nfilms;
+    out[0] = r.loaded; out[1] = r.shot; out[2] = r.exposures;
+    out[3] = need_wind;
+    out[4] = known ? fos_films[r.film].box_iso : 0;
     if (film && film_size > 0)
         snprintf(film, (size_t) film_size, "%s", r.loaded && r.film >= 0 && r.film < fos_nfilms ? fos_films[r.film].name : "");
+}
+
+int mf_pending_rolls(void)
+{
+    struct fos_lab_roll rolls[32];
+    int n = fos_lab_scan(rolls, 32);
+    int count = 0;
+    for (int i = 0; i < n; i++)
+    {
+        const struct fos_lab_roll *r = &rolls[i];
+        int developed = r->sheet && r->developed >= r->shot && r->jpegs >= r->developed;
+        int finished_in_cam = r->in_camera && !settings[FS_WIND] && r->shot >= r->exposures;
+        if (!developed && (!r->in_camera || finished_in_cam) && r->shot > 0)
+            count++;
+    }
+    return count;
+}
+
+int mf_film_count(void) { return fos_nfilms; }
+
+void mf_film_info(int idx, int out[6], char *name, int name_size)
+{
+    if (idx < 0 || idx >= fos_nfilms)
+    {
+        memset(out, 0, sizeof(int) * 6);
+        if (name && name_size > 0) name[0] = 0;
+        return;
+    }
+    const struct fos_film *f = &fos_films[idx];
+    out[0] = f->box_iso;
+    out[1] = f->group;
+    out[2] = f->grain;
+    out[3] = f->punch;
+    out[4] = f->colour;
+    out[5] = f->warmth;
+    if (name && name_size > 0) snprintf(name, (size_t) name_size, "%s", f->name);
+}
+
+void mf_draw_canister(int film, int exposures, int leader, uint32_t *argb, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    uint8_t *px = calloc((size_t) w * h, 1);
+    if (!px) return;
+    struct fos_canvas cv;
+    fos_canvas_init(&cv, px, w, w, h);
+    struct fos_can *c = fos_can_new(film, exposures);
+    if (c)
+    {
+        struct fos_can_pose p = {
+            .cx8 = (leader > 0 ? w * 38 / 100 : w / 2) << 8,
+            .floor_y = h - 14,
+            .scale = 256,
+            .rot = 0,
+            .light = 256,
+            .leader = leader,
+            .reflect = 0,
+            .fast = 0,
+        };
+        fos_can_draw(&cv, c, &p);
+        fos_can_free(c);
+    }
+    for (int i = 0; i < w * h; i++)
+    {
+        uint8_t ix = px[i];
+        argb[i] = ix == 0 ? 0 : (fos_pal[ix] | 0xFF000000u);
+    }
+    free(px);
+}
+
+void mf_load_roll(int film, int exposures)
+{
+    if (film >= 0 && film < fos_nfilms && !roll.loaded) load_roll(film, exposures);
+}
+
+void mf_rewind_roll(void)
+{
+    rewind_roll();
+}
+
+int mf_roll_frames(char *out, int out_size)
+{
+    if (!out || out_size <= 0) return 0;
+    out[0] = 0;
+    if (!roll.loaded || roll.shot <= 0) return 0;
+    struct fos_lab_frame frames[64];
+    int n = fos_lab_frames(roll.number, frames, 64);
+    if (n > roll.shot) n = roll.shot;
+    int pos = 0;
+    for (int i = 0; i < n && pos < out_size - 1; i++)
+    {
+        int wrote = snprintf(out + pos, (size_t) (out_size - pos), "%d|%s|%s\n",
+                             frames[i].no, frames[i].when, frames[i].fstop);
+        if (wrote < 0 || pos + wrote >= out_size) break;
+        pos += wrote;
+    }
+    return n;
 }
 
 /* ---------------------------------------------------------------- LiveView */
@@ -538,7 +643,7 @@ void mf_run(void)
 
         if (done && shot_pending)
         {
-            if (done > 0) shot_end();
+            if (done > 0) shot_end(done == 2);
             shot_pending = 0;
         }
         if (end_due && now > end_due && FINISHED && !half_press && !shot_pending)
@@ -587,7 +692,13 @@ int mf_init(const char *files_dir, const char *card_dir)
     snprintf(font, sizeof(font), "%s/%s", files_dir, FOS_FONT_FILE);
     snprintf(films, sizeof(films), "%s/%s", files_dir, FOS_FILM_FILE);
     if (!file_ok(font)) { logf_("no fonts at %s", font); return -1; }
-    snprintf(card, sizeof(card), "%s%s", card_dir, card_dir[strlen(card_dir) - 1] == '/' ? "" : "/");
+    /* The film OS keeps a card's paths in 64 or 128 bytes, as a camera's card
+     * is "B:/". The app's folder is 70 characters before DCIM/..., so the
+     * logs and RAWs were cut short and the darkroom found no frames: the card
+     * is the working directory, and its paths start "./". */
+    mkdirs(card_dir);
+    if (chdir(card_dir)) { logf_("can't go into the card %s: %s", card_dir, strerror(errno)); return -1; }
+    snprintf(card, sizeof(card), "./");
     snprintf(dcim, sizeof(dcim), "%sDCIM/100CANON", card);
     snprintf(state_path, sizeof(state_path), "%sML/MFSTATE.BIN", card);
     mkdirs(dcim);
