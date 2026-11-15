@@ -1,0 +1,9 @@
+.gradle/
+build/
+app/build/
+app/.cxx/
+local.properties
+*.iml
+.idea/
+# made by scripts/build_assets.sh from ml-dev/ (and the Film-Luts download)
+app/src/main/assets/
