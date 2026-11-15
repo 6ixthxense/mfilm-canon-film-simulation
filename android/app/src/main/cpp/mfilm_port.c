@@ -580,7 +580,7 @@ int mf_lab_roll_prints(int roll_no, char *out, int out_size)
             const char *base = strrchr(f->cr2, '/');
             char name[9];
             fos_copy(name, sizeof(name), base ? base + 1 : f->cr2, 8);
-            snprintf(jpeg, sizeof(jpeg), "%s%s/%s.JPG", card_dir, dcim_dir, name);
+            snprintf(jpeg, sizeof(jpeg), "%s%s/%s.JPG", card, dcim_dir, name);
             struct stat st;
             if (stat(jpeg, &st) != 0) jpeg[0] = 0;
         }
@@ -659,8 +659,8 @@ int mf_dev_step(int budget_ms, int out[3])
             }
             struct stat st1, st2;
             char full_prn[300], full_jpg[300];
-            snprintf(full_prn, sizeof(full_prn), "%s%s", card_dir, path);
-            snprintf(full_jpg, sizeof(full_jpg), "%s%s", card_dir, jpeg);
+            snprintf(full_prn, sizeof(full_prn), "%s%s", card, path);
+            snprintf(full_jpg, sizeof(full_jpg), "%s%s", card, jpeg);
             if (stat(full_prn, &st1) == 0 && (!jpeg[0] || f->missing || stat(full_jpg, &st2) == 0))
             {
                 dk_done++;
