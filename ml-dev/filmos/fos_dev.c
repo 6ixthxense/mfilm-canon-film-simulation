@@ -343,7 +343,7 @@ struct fos_dev
     const struct fos_look *look;
     int stage, row;                     /* row: progress through a per-row stage */
     const char *err;
-    char errbuf[48];
+    char errbuf[72];
     void *f;
 
     /* the file, destuffed into whole bytes of entropy data */
@@ -388,6 +388,14 @@ struct fos_dev
     int wbase, wshift;                  /* a bin's first raw value: wbase + (bin << wshift) */
     int clip;                           /* where this frame's samples clip, 4096 = WHITE_LEVEL */
     int wb[3];                          /* the white balance the camera wrote into the frame: red, green, blue; 0s if none */
+    int white;                          /* a full pixel: WHITE_LEVEL, or the sensor's (fos_dev_start_raw) */
+    float xyz_cam[3][3];                /* XYZ -> camera: XYZ_CAM, or the sensor's */
+    int black_set;                      /* 1: black_given is the black, not the masked columns */
+    float black_given;
+    const uint16_t *rpx;                /* the mosaic in memory (fos_dev_start_raw), or NULL: the CR2 */
+    int rstride;
+    int dng;                            /* the frame is a DNG: read whole into rown when it opens */
+    uint16_t *rown;
     int pre[3];                         /* the frame's white balance and white level, raw/16 -> 1/4096, << 14 */
     int mat[3][3];                      /* camera -> linear sRGB, 1/4096 */
     int mul[3];                         /* exposure and film balance, 1/4096 */
@@ -771,14 +779,18 @@ static int big_setup(struct fos_dev *d, int size);
 
 static int setup_maps(struct fos_dev *d)
 {
-    d->raw_w = d->wide * d->clrs;
-    d->raw_h = d->high;
-    if (!(d->clrs & 1) && d->raw_w > 4 * d->raw_h)
+    if (!d->rpx)    /* a mosaic in memory came with its size */
     {
-        /* some cameras store the sensor as a frame twice as wide and half
-         * as high (as dcraw and LibRaw read it): the samples run the same */
-        d->raw_w /= 2;
-        d->raw_h *= 2;
+        d->raw_w = d->wide * d->clrs;
+        d->raw_h = d->high;
+        if (!(d->clrs & 1) && d->raw_w > 4 * d->raw_h)
+        {
+            /* some cameras store the sensor as a frame twice as wide and half
+             * as high (as dcraw and LibRaw read it): the samples run the same */
+            d->raw_w /= 2;
+            d->raw_h *= 2;
+        }
+        d->rphase = row_phase(d->raw_w, d->raw_h);
     }
     if (d->slices[0] && d->slices[0] * d->slices[1] + d->slices[2] != d->raw_w)
         return fail(d, "RAW slices don't add up");
@@ -798,7 +810,6 @@ static int setup_maps(struct fos_dev *d)
         d->ob_l = 0; d->ob_r = d->crop_l - 1;
     }
     if (d->ob_r > d->crop_l - 20) d->ob_r = d->crop_l - 20;
-    d->rphase = row_phase(d->raw_w, d->raw_h);
     int portrait = d->orient == 6 || d->orient == 8;
     d->rows_axis_x = portrait;
     d->oh = FOS_PRINT_H;
@@ -1428,7 +1439,7 @@ static int white_clip(const struct fos_dev *d, float black)
     }
     int bin = pile >= 0 ? pile : top + 1;           /* top + 1: above every sample of the top bin */
     if (bin < 0) return 4096;
-    int clip = (int) (((float) (d->wbase + (bin << d->wshift)) - black) * 4096 / ((float) WHITE_LEVEL - black) + 0.5f);
+    int clip = (int) (((float) (d->wbase + (bin << d->wshift)) - black) * 4096 / ((float) d->white - black) + 0.5f);
     if (pile < 0 && clip < 4096) clip = 4096;
     /* a frame can't clip far from where its camera does: beyond this the counts are not to be believed */
     return clip < 2048 || clip > 6144 ? 4096 : clip;
@@ -1595,7 +1606,7 @@ static void setup_colour(struct fos_dev *d)
         for (int j = 0; j < 3; j++)
         {
             cam_rgb[i][j] = 0;
-            for (int k = 0; k < 3; k++) cam_rgb[i][j] += XYZ_CAM[i][k] * RGB_XYZ[k][j];
+            for (int k = 0; k < 3; k++) cam_rgb[i][j] += d->xyz_cam[i][k] * RGB_XYZ[k][j];
             sum += cam_rgb[i][j];
         }
         for (int j = 0; j < 3; j++) cam_rgb[i][j] /= sum;
@@ -1625,8 +1636,8 @@ static void setup_colour(struct fos_dev *d)
     inv[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / det;
     inv[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / det;
 
-    float black = d->black_n ? (float) d->black_sum / (float) d->black_n : 2048;
-    if (black < 0 || black > WHITE_LEVEL / 2) black = 2048;     /* a damaged file */
+    float black = d->black_set ? d->black_given : d->black_n ? (float) d->black_sum / (float) d->black_n : 2048;
+    if (!d->black_set && (black < 0 || black > d->white / 2)) black = 2048;     /* a damaged file */
     d->black16 = (int) (black * 16 + 0.5f);
     /* a blown pixel is neutral when every colour is cut at what the least
      * multiplied one reaches: green, unless a balance turns one down below it */
@@ -1636,7 +1647,7 @@ static void setup_colour(struct fos_dev *d)
     /* raw/16 above black -> 4096 at the white level, balanced, << 14 */
     for (int c = 0; c < 3; c++)
     {
-        d->pre[c] = (int) (pre[c] * 4096 * 16384 / ((WHITE_LEVEL - black) * 16) + 0.5f);
+        d->pre[c] = (int) (pre[c] * 4096 * 16384 / ((d->white - black) * 16) + 0.5f);
         d->mul[c] = 4096;
         for (int j = 0; j < 3; j++) d->mat[c][j] = (int) (inv[c][j] * 4096 + (inv[c][j] < 0 ? -0.5f : 0.5f));
     }
@@ -1923,9 +1934,74 @@ struct fos_dev *fos_dev_start(const char *cr2, const char *print, int film, int 
     d->frame = frame;
     d->look = fos_look_of(fos_films[d->film].key);
     d->seed = 12345u + (unsigned) frame * 7919u;
+    d->white = WHITE_LEVEL;
+    memcpy(d->xyz_cam, XYZ_CAM, sizeof(d->xyz_cam));
     d->stage = ST_OPEN;
+#ifdef FOS_DEV_RAWIN
+    int n = (int) strlen(d->cr2);
+    d->dng = n > 4 && (!strcmp(d->cr2 + n - 4, ".DNG") || !strcmp(d->cr2 + n - 4, ".dng"));
+#endif
     return d;
 }
+
+#ifdef FOS_DEV_RAWIN
+/* the frame's mosaic and what is known of it, in place of a CR2's */
+static int raw_setup(struct fos_dev *d, const struct fos_raw *r)
+{
+    if (!r || !r->px || r->w < 64 || r->h < 64 || r->stride < r->w || r->bits < 8 || r->bits > 16
+        || r->white <= r->black || r->cfa < 0 || r->cfa > 3) return 0;
+    /* The darkroom's mosaic has red at the top left, or (rphase) a row down.
+     * A red one column in (GRBG, BGGR) is made that by starting a column in. */
+    int dx = r->cfa == FOS_CFA_GRBG || r->cfa == FOS_CFA_BGGR;
+    d->rphase = r->cfa == FOS_CFA_GBRG || r->cfa == FOS_CFA_BGGR;
+    d->rpx = r->px + dx;
+    d->rstride = r->stride;
+    d->raw_w = r->w - dx;
+    d->raw_h = r->h;
+    d->bits = r->bits;
+    d->orient = r->orient == 3 || r->orient == 6 || r->orient == 8 ? r->orient : 1;
+    if (r->crop_w > 0) { d->crop_l = r->crop_l - dx; d->crop_t = r->crop_t; d->crop_w = r->crop_w; d->crop_h = r->crop_h; }
+    else { d->crop_l = 0; d->crop_t = 0; d->crop_w = d->raw_w; d->crop_h = d->raw_h; }
+    if (d->crop_l < 0) { d->crop_w += d->crop_l; d->crop_l = 0; }
+    if (d->crop_l + d->crop_w > d->raw_w) d->crop_w = d->raw_w - d->crop_l;
+    if (d->crop_t + d->crop_h > d->raw_h) d->crop_h = d->raw_h - d->crop_t;
+    d->ob_l = d->ob_r = 0;                      /* the black is given */
+    d->black_set = 1;
+    d->black_given = r->black;
+    d->white = r->white;
+    memcpy(d->xyz_cam, r->xyz_cam, sizeof(d->xyz_cam));
+    /* as Canon writes it: green 1024 */
+    if (r->wb[0] > 0 && r->wb[1] > 0 && r->wb[2] > 0)
+        for (int c = 0; c < 3; c++) d->wb[c] = (int) (r->wb[c] * 1024 / r->wb[1] + 0.5f);
+    return 1;
+}
+
+struct fos_dev *fos_dev_start_raw(const struct fos_raw *r, const char *print, int film, int frame,
+                                  const char *when, const char *fstop)
+{
+    struct fos_dev *d = fos_dev_start("(memory)", print, film, frame, when, fstop);
+    if (d && !raw_setup(d, r)) { fos_dev_free(d); d = 0; }
+    return d;
+}
+
+#ifdef FOS_DEV_TEST
+void fos_dev_raw_of(const struct fos_dev *d, struct fos_raw *r)
+{
+    memset(r, 0, sizeof(*r));
+    r->w = r->stride = d->raw_w;
+    r->h = d->raw_h;
+    r->bits = d->bits;
+    r->cfa = d->rphase ? FOS_CFA_GBRG : FOS_CFA_RGGB;
+    r->crop_l = d->crop_l; r->crop_t = d->crop_t; r->crop_w = d->crop_w; r->crop_h = d->crop_h;
+    r->black = d->black_n ? (float) d->black_sum / (float) d->black_n : 2048;
+    if (r->black < 0 || r->black > d->white / 2) r->black = 2048;
+    r->white = d->white;
+    memcpy(r->xyz_cam, d->xyz_cam, sizeof(r->xyz_cam));
+    for (int c = 0; c < 3; c++) r->wb[c] = (float) d->wb[c];
+    r->orient = d->orient;
+}
+#endif
+#endif
 
 void fos_dev_jpeg(struct fos_dev *d, const char *path)
 {
@@ -1966,6 +2042,7 @@ void fos_dev_free(struct fos_dev *d)
     if (d->bzoom) fos_port_close(d->bzoom);
     big_free(d);
     fos_port_free(d->smask[0]); fos_port_free(d->smask[1]);
+    fos_port_free(d->rown);
     fos_port_free(d);
 }
 
@@ -2063,7 +2140,7 @@ static void stage_key(struct fos_dev *d)
                 }
             fclose(f);
         }
-        fprintf(stderr, "dump: black %d/16, white %d, clip %d, pre %d %d %d, balance %d %d %d\n", d->black16, WHITE_LEVEL, d->clip,
+        fprintf(stderr, "dump: black %d/16, white %d, clip %d, pre %d %d %d, balance %d %d %d\n", d->black16, d->white, d->clip,
                 d->pre[0], d->pre[1], d->pre[2], d->wb[0], d->wb[1], d->wb[2]);
     }
     /* FOS_DUMP_CUT: a byte for each print pixel, 1 where one of its three
@@ -2662,6 +2739,22 @@ static int dev_step(struct fos_dev *d, int budget_ms)
         {
             case ST_OPEN:
                 if (!tables_ready()) return fail_mem(d, (int) sizeof(*tab));
+#ifdef FOS_DEV_RAWIN
+                if (d->dng && !d->rpx)
+                {
+                    struct fos_raw r;
+                    if (!fos_dng_load(d->cr2, d->look->balance, &r, &d->rown, d->errbuf, sizeof(d->errbuf)))
+                        return fail(d, d->errbuf);
+                    if (!raw_setup(d, &r)) return fail(d, "a DNG the darkroom can't take");
+                }
+#endif
+                if (d->rpx)
+                {
+                    /* the mosaic is in memory: nothing to read but its rows */
+                    if (setup_maps(d) < 0) return -1;
+                    d->stage = ST_DECODE;
+                    break;
+                }
                 d->f = fos_port_open(d->cr2, 0);
                 if (!d->f) return fail(d, "can't open the RAW file");
                 if (parse_tiff(d) < 0 || parse_ljpeg(d) < 0 || setup_maps(d) < 0) return -1;
@@ -2693,10 +2786,15 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                     fos_port_log(msg);
                     return fail(d, "no colour table for this film on the card");
                 }
-                decode(d, 1 << 14);
+                if (d->rpx)
+                    /* as decode(): whole rows, about as many samples a step */
+                    for (long n = 0; n < 1 << 14 && d->done < d->total; n += d->raw_w, d->done += d->raw_w)
+                        scatter(d, d->rpx + (long) d->sy * d->rstride, d->raw_w);
+                else
+                    decode(d, 1 << 14);
                 if (d->done >= d->total)
                 {
-                    fos_port_close(d->f);
+                    if (d->f) fos_port_close(d->f);
                     d->f = 0;
                     fos_port_free(d->buf); d->buf = 0;
                     d->rgb = fos_port_alloc(N * 3);

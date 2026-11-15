@@ -51,6 +51,8 @@ jobs:
         run: make -C ml-dev/filmos/sim out/sim out/devtest out/mkcr2 out/tables/TABLES.txt
       - name: Develop the problem rolls
         run: bash ml-dev/filmos/sim/cardtest.sh
+      - name: A mosaic in memory (the phone's way in) gives the CR2's print
+        run: sh ml-dev/filmos/sim/rawintest.sh && python ml-dev/filmos/sim/dngtest.py
       - name: The darkroom's colour against LibRaw
         run: python ml-dev/filmos/sim/colourtest.py
       - name: The films' colour tables

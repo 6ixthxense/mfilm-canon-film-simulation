@@ -34,7 +34,7 @@ void mf_run(void);
 void mf_key(int k);                 /* FK_*, | 0x100 on release */
 void mf_half(int down);             /* the shutter half-pressed */
 void mf_shutter(void);              /* fully pressed: MF_EV_CAPTURE follows if a frame can be shot */
-void mf_shot_done(int ok);          /* the frame asked for by MF_EV_CAPTURE was taken (or not) */
+void mf_shot_done(int ok, int dng); /* the frame asked for by MF_EV_CAPTURE was taken (or not): IMG_nnnn.DNG, or .CR2 */
 void mf_set_pending(int n);         /* how many CR2s are still being written: the darkroom waits for them */
 void mf_open(int screen);           /* FOS_OPEN_*, when on LiveView */
 void mf_battery(int percent);
@@ -44,7 +44,15 @@ int  mf_poll_event(int *what, int *a, int *b);   /* 1 while there are events */
  * changed since the last call; returns 1 if out was written */
 int  mf_frame(uint32_t *out, int force);
 int  mf_ui_running(void);
-void mf_roll_info(int *loaded, int *shot, int *exposures, char *film, int film_size);
+/* out: loaded, shot, exposures, the frame needs winding on, the film's ISO; film: its name */
+void mf_roll_info(int out[5], char *film, int film_size);
+int  mf_pending_rolls(void);
+int  mf_film_count(void);
+void mf_film_info(int idx, int out[6], char *name, int name_size);
+void mf_draw_canister(int film, int exposures, int leader, uint32_t *argb, int w, int h);
+void mf_load_roll(int film, int exposures);
+void mf_rewind_roll(void);
+int  mf_roll_frames(char *out, int out_size);
 const char *mf_card(void);
 
 /* a CR2 shaped like the EOS M's (the whole 18 MP sensor) from a photo:

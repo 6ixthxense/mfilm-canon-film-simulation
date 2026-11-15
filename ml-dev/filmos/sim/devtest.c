@@ -54,8 +54,18 @@ static uint16_t *raw;
 static int raw_w, raw_h;
 static long bad, seen;
 
+/* FOS_VIA_RAW=1: every sample kept as it is decoded, then the frame developed
+ * again from them through fos_dev_start_raw (the phone's way in): the two
+ * prints must be the same to the byte */
+#define MOS_W 6144
+#define MOS_H 4096
+static uint16_t *mosaic;
+static int second_pass;
+
 void fos_dev_test_sample(int x, int y, int v)
 {
+    if (second_pass) return;
+    if (mosaic && x < MOS_W && y < MOS_H) mosaic[(long) y * MOS_W + x] = (uint16_t) v;
     seen++;
     if (!raw) return;
     if (x >= raw_w || y >= raw_h || raw[(long) y * raw_w + x] != v)
@@ -144,17 +154,56 @@ int main(int argc, char **argv)
     /* FOS_LUT_DIR: the film tables are there, as on the camera's card; FOS_MIX: mixed here instead */
     if (getenv("FOS_LUT_DIR")) fos_dev_cache(getenv("FOS_LUT_DIR"));
     if (getenv("FOS_MIX")) { fos_dev_cache(""); fos_dev_table(film); }
-    int t0 = fos_port_ms(), steps = 0, p = 0;
-    struct fos_dev *d = fos_dev_start(argv[a], argv[a + 1], film, 1, "2026-10-22 17:45", "2.8");
-    /* FOS_JPEG: the full-colour frame as a JPEG too, as the camera writes it to DCIM */
-    if (getenv("FOS_JPEG")) fos_dev_jpeg(d, getenv("FOS_JPEG"));
-    /* FOS_SIZE=1|2: the bigger print (M, L) as the JPEG, FOS_ZOOM: its zoom file; FOS_STAMP=1: the date on it */
-    if (getenv("FOS_SIZE")) fos_dev_big(d, atoi(getenv("FOS_SIZE")), getenv("FOS_ZOOM"));
-    if (getenv("FOS_STAMP")) fos_dev_stamp(d, 1);
-    while ((p = fos_dev_step(d, 40)) >= 0 && p < 1000) steps++;
-    if (p < 0) { fprintf(stderr, "%s: %s\n", argv[a], fos_dev_error(d)); fos_dev_free(d); return 1; }
-    printf("%s: %d ms, %d steps\n", argv[a], fos_port_ms() - t0, steps);
-    fos_dev_free(d);
+#ifdef FOS_DEV_RAWIN
+    int via_raw = getenv("FOS_VIA_RAW") != 0;
+    static uint16_t *mosaic_mem;          /* the mosaic, with a sample before it to shift into */
+    if (via_raw && !(mosaic_mem = calloc((size_t) MOS_W * MOS_H + 8, 2))) return 1;
+    if (via_raw) mosaic = mosaic_mem + 8;
+    struct fos_raw r = { 0 };
+#else
+    const int via_raw = 0;              /* the build_fork.sh devtest: no way in from memory */
+#endif
+    for (int pass = 0; pass < 1 + via_raw; pass++)
+    {
+        int t0 = fos_port_ms(), steps = 0, p = 0;
+        struct fos_dev *d = 0;
+        if (!pass) d = fos_dev_start(argv[a], argv[a + 1], film, 1, "2026-10-22 17:45", "2.8");
+#ifdef FOS_DEV_RAWIN
+        else
+        {
+            second_pass = 1;
+            r.px = mosaic;
+            r.stride = MOS_W;
+            /* FOS_VIA_RAW=shift: the mosaic handed over a column early, as a
+             * GRBG or BGGR sensor's (the column before it is the padding) */
+            if (!strcmp(getenv("FOS_VIA_RAW"), "shift"))
+            {
+                r.px = mosaic - 1;
+                r.w++;
+                r.crop_l++;
+                r.cfa = r.cfa == FOS_CFA_RGGB ? FOS_CFA_GRBG : FOS_CFA_BGGR;
+            }
+            d = fos_dev_start_raw(&r, argv[a + 1], film, 1, "2026-10-22 17:45", "2.8");
+            if (!d) { fprintf(stderr, "fos_dev_start_raw: refused the mosaic\n"); return 1; }
+        }
+#endif
+        /* FOS_JPEG: the full-colour frame as a JPEG too, as the camera writes it to DCIM */
+        if (getenv("FOS_JPEG")) fos_dev_jpeg(d, getenv("FOS_JPEG"));
+        /* FOS_SIZE=1|2: the bigger print (M, L) as the JPEG, FOS_ZOOM: its zoom file; FOS_STAMP=1: the date on it */
+        if (getenv("FOS_SIZE")) fos_dev_big(d, atoi(getenv("FOS_SIZE")), getenv("FOS_ZOOM"));
+        if (getenv("FOS_STAMP")) fos_dev_stamp(d, 1);
+        while ((p = fos_dev_step(d, 40)) >= 0 && p < 1000) steps++;
+        if (p < 0) { fprintf(stderr, "%s: %s\n", argv[a], fos_dev_error(d)); fos_dev_free(d); return 1; }
+        printf("%s: %d ms, %d steps%s\n", argv[a], fos_port_ms() - t0, steps, pass ? " (from memory)" : "");
+#ifdef FOS_DEV_RAWIN
+        if (!pass && via_raw)
+        {
+            fos_dev_raw_of(d, &r);
+            if (r.w > MOS_W || r.h > MOS_H) { fprintf(stderr, "a mosaic bigger than %d x %d\n", MOS_W, MOS_H); return 1; }
+        }
+#endif
+        fos_dev_free(d);
+    }
     if (rawpath)
     {
         printf("decoder: %ld samples, %ld wrong (of %ld)\n", seen, bad, (long) raw_w * raw_h);

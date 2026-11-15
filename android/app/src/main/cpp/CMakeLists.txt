@@ -15,11 +15,12 @@ add_library(mfilm SHARED
   ${FOS}/sim/fonts.c
   ${FOS}/sim/films.c
   ${FOS}/fos_gfx.c ${FOS}/fos_film.c ${FOS}/fos_ui.c ${FOS}/fos_shelf.c ${FOS}/fos_pages.c
-  ${FOS}/fos_hud.c ${FOS}/fos_print.c ${FOS}/fos_dark.c ${FOS}/fos_dev.c ${FOS}/fos_lab.c
+  ${FOS}/fos_hud.c ${FOS}/fos_print.c ${FOS}/fos_dark.c ${FOS}/fos_dev.c ${FOS}/fos_dng.c ${FOS}/fos_lab.c
   ${FOS}/fos_looks.c ${FOS}/fos_jpeg.c)
 
 target_include_directories(mfilm PRIVATE ${FOS})
-target_compile_definitions(mfilm PRIVATE MFILM_VERSION="${MFILM_VERSION}")
+# FOS_DEV_RAWIN: the darkroom also develops the phone's own RAW (IMG_nnnn.DNG, fos_dng.c)
+target_compile_definitions(mfilm PRIVATE MFILM_VERSION="${MFILM_VERSION}" FOS_DEV_RAWIN)
 target_compile_options(mfilm PRIVATE -std=gnu99 -O2 -Wno-unused-parameter -Wno-unused-function
   -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable)
 # sim/port_files.c is the card (stdio); its camera name is ours (mfilm_port.c), as web/build.sh does

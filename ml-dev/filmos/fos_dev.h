@@ -131,6 +131,37 @@ void fos_dev_release();
 /* develop one frame: cr2 in, a print file out */
 struct fos_dev *fos_dev_start(const char *cr2, const char *print, int film, int frame,
                               const char *when, const char *fstop);
+#ifdef FOS_DEV_RAWIN
+/* A frame's mosaic already in memory, from a sensor that isn't a Canon's
+ * (a phone's RAW_SENSOR, a DNG): what the CR2 would have said about it.
+ * Only in builds that ask for it (Android, devtest), not the camera's. */
+enum { FOS_CFA_RGGB, FOS_CFA_GRBG, FOS_CFA_GBRG, FOS_CFA_BGGR };
+struct fos_raw
+{
+    const uint16_t *px;         /* the samples, row after row; kept until the frame is developed */
+    int w, h, stride;           /* stride: samples from one row to the next */
+    int bits;                   /* a sample's (10, 12, 14) */
+    int cfa;                    /* FOS_CFA_*: the colours of the top left 2 x 2 */
+    int crop_l, crop_t, crop_w, crop_h;     /* the picture on the mosaic; crop_w 0: all of it */
+    float black;                /* the black level, raw units */
+    int white;                  /* a full pixel, raw units: the scale, as WHITE_LEVEL */
+    float xyz_cam[3][3];        /* XYZ -> camera, as Adobe's and DNG's ColorMatrix */
+    float wb[3];                /* white balance multipliers, red green blue (any scale); 0s: the matrix's daylight */
+    int orient;                 /* EXIF: 1, 3, 6 or 8 */
+};
+struct fos_dev *fos_dev_start_raw(const struct fos_raw *r, const char *print, int film, int frame,
+                                  const char *when, const char *fstop);
+/* a phone's DNG into r, its mosaic allocated (*mosaic, fos_port_free it):
+ * the colour matrix nearest kelvin, the lens's fall-off taken out, the
+ * middle 3:2 as the picture. 0 and err on failure (fos_dng.c). fos_dev_start
+ * develops a frame whose name ends in .DNG this way by itself. */
+int fos_dng_load(const char *path, int kelvin, struct fos_raw *r, uint16_t **mosaic, char *err, int err_size);
+#ifdef FOS_DEV_TEST
+/* what a CR2's frame was read as, once it is decoded (r->px: NULL), so
+ * devtest can develop the same mosaic through fos_dev_start_raw */
+void fos_dev_raw_of(const struct fos_dev *d, struct fos_raw *r);
+#endif
+#endif
 /* work for about budget_ms; returns progress 0..1000, 1000 when the print
  * is written, or < 0 when the frame can't be developed */
 int fos_dev_step(struct fos_dev *d, int budget_ms);
