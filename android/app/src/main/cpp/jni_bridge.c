@@ -211,6 +211,11 @@ JNIEXPORT jboolean JNICALL FN(devPreview)(JNIEnv *env, jclass cls, jobject bitma
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jstring JNICALL FN(devError)(JNIEnv *env, jclass cls)
+{
+    return (*env)->NewStringUTF(env, mf_dev_error());
+}
+
 JNIEXPORT void JNICALL FN(devClose)(JNIEnv *env, jclass cls)
 {
     mf_dev_close();
