@@ -71,6 +71,20 @@ object Native {
     @JvmStatic external fun loadRoll(film: Int, exposures: Int)
     @JvmStatic external fun rewindRoll()
     @JvmStatic external fun rollFrames(): String
+
+    const val SET_WIND = 3
+    const val SET_STAMP = 23
+    @JvmStatic external fun getSetting(id: Int): Int
+    @JvmStatic external fun setSetting(id: Int, value: Int)
+    @JvmStatic external fun setShotFstop(fstopX100: Int)
+    @JvmStatic external fun labRolls(): String
+    @JvmStatic external fun labRollPrints(rollNo: Int): String
+    @JvmStatic external fun labDelete(rollNo: Int, whole: Boolean): Int
+    @JvmStatic external fun devOpen(rollNo: Int, size: Int): Int
+    /** out (3): currentFrameNo, doneFrames, progress0to1000; returns 1 developing, 0 done, -1 error */
+    @JvmStatic external fun devStep(budgetMs: Int, out: IntArray): Int
+    @JvmStatic external fun devPreview(bitmap: Bitmap): Boolean
+    @JvmStatic external fun devClose()
     /** argb: sRGB pixels, w x h; 0 on success */
     @JvmStatic external fun makeCr2(path: String, argb: IntArray, w: Int, h: Int, seed: Int): Int
 }

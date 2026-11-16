@@ -150,6 +150,93 @@ JNIEXPORT jstring JNICALL FN(rollFrames)(JNIEnv *env, jclass cls)
     return (*env)->NewStringUTF(env, buf);
 }
 
+JNIEXPORT jint JNICALL FN(getSetting)(JNIEnv *env, jclass cls, jint id)
+{
+    return mf_get_setting(id);
+}
+
+JNIEXPORT void JNICALL FN(setSetting)(JNIEnv *env, jclass cls, jint id, jint val)
+{
+    mf_set_setting(id, val);
+}
+
+JNIEXPORT void JNICALL FN(setShotFstop)(JNIEnv *env, jclass cls, jint fstopX100)
+{
+    mf_set_shot_fstop(fstopX100);
+}
+
+JNIEXPORT jstring JNICALL FN(labRolls)(JNIEnv *env, jclass cls)
+{
+    char buf[4096];
+    mf_lab_rolls(buf, sizeof(buf));
+    return (*env)->NewStringUTF(env, buf);
+}
+
+JNIEXPORT jstring JNICALL FN(labRollPrints)(JNIEnv *env, jclass cls, jint rollNo)
+{
+    char *buf = malloc(16384);
+    if (!buf) return (*env)->NewStringUTF(env, "");
+    mf_lab_roll_prints(rollNo, buf, 16384);
+    jstring res = (*env)->NewStringUTF(env, buf);
+    free(buf);
+    return res;
+}
+
+JNIEXPORT jint JNICALL FN(labDelete)(JNIEnv *env, jclass cls, jint rollNo, jboolean whole)
+{
+    return mf_lab_delete(rollNo, whole ? 1 : 0);
+}
+
+JNIEXPORT jint JNICALL FN(devOpen)(JNIEnv *env, jclass cls, jint rollNo, jint size)
+{
+    return mf_dev_open(rollNo, size);
+}
+
+JNIEXPORT jint JNICALL FN(devStep)(JNIEnv *env, jclass cls, jint budgetMs, jintArray out)
+{
+    int r[3] = {0, 0, 0};
+    int res = mf_dev_step(budgetMs, r);
+    (*env)->SetIntArrayRegion(env, out, 0, 3, r);
+    return res;
+}
+
+JNIEXPORT jboolean JNICALL FN(devPreview)(JNIEnv *env, jclass cls, jobject bitmap)
+{
+    AndroidBitmapInfo info;
+    void *px;
+    if (AndroidBitmap_getInfo(env, bitmap, &info) < 0 ||
+        info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || AndroidBitmap_lockPixels(env, bitmap, &px) < 0)
+        return JNI_FALSE;
+    int w = (int) info.width, h = (int) info.height;
+    uint32_t *buf = malloc((size_t) w * h * 4);
+    int ok = 0;
+    if (buf)
+    {
+        ok = mf_dev_preview_bmp(buf, w, h);
+        if (ok)
+        {
+            for (int y = 0; y < h; y++)
+            {
+                uint32_t *row = (uint32_t *) ((uint8_t *) px + (size_t) y * info.stride);
+                const uint32_t *src = buf + y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    uint32_t c = src[x];
+                    row[x] = (c & 0xFF00FF00u) | (c >> 16 & 0xFF) | (c & 0xFF) << 16;
+                }
+            }
+        }
+        free(buf);
+    }
+    AndroidBitmap_unlockPixels(env, bitmap);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL FN(devClose)(JNIEnv *env, jclass cls)
+{
+    mf_dev_close();
+}
+
 JNIEXPORT jint JNICALL FN(makeCr2)(JNIEnv *env, jclass cls, jstring path, jintArray argb, jint w, jint h, jint seed)
 {
     if ((*env)->GetArrayLength(env, argb) < w * h) return -1;

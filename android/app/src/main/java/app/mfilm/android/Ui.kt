@@ -111,12 +111,11 @@ fun Label(text: String, modifier: Modifier = Modifier, size: TextUnit = 13.sp, c
     BasicText(text.uppercase(), modifier, style = engraved(size, color), maxLines = 1)
 }
 
-enum class Route { CAMERA, SHELF, ROLL }
+enum class Route { CAMERA, SHELF, ROLL, DARKROOM, PRINTS, SETTINGS }
 
 /** What the screens show: the activity keeps it up to date. */
 class Ui {
     var route by mutableStateOf(Route.CAMERA)
-    var filmOs by mutableStateOf(true)          // the film OS's screens are up (the shelf, the darkroom ...), or the camera
     var loaded by mutableStateOf(false)
     var film by mutableStateOf("")
     var iso by mutableIntStateOf(0)
@@ -133,6 +132,13 @@ class Ui {
     var lenses by mutableStateOf(listOf(1f))
     var pendingRolls by mutableIntStateOf(0)
     var leftHanded by mutableStateOf(false)
+    var realisticWind by mutableStateOf(false)
+    var cleanFinder by mutableStateOf(false)
+    var bwPreview by mutableStateOf(true)
+    var isBwFilm by mutableStateOf(false)
+    var dateStamp by mutableStateOf(false)
+    var framelines by mutableStateOf(true)
+    var printsRoll by mutableIntStateOf(-1)
 }
 
 /** What the controls do. */
@@ -147,8 +153,8 @@ class Actions(
     val counter: () -> Unit,
     val prints: () -> Unit,
     val darkroom: () -> Unit,
+    val settings: () -> Unit,
     val wind: () -> Unit,
-    val key: (Int) -> Unit,                     // a film OS key, while its screens are up
 )
 
 // ---------------------------------------------------------------- the controls
@@ -444,109 +450,139 @@ fun ExposureDial(ui: Ui, vertical: Boolean, modifier: Modifier = Modifier, onSte
 
 /** a view made by the activity, put where the layout has it (it may have been somewhere before) */
 @Composable
-private fun <T : View> Placed(view: T, modifier: Modifier = Modifier) {
-    AndroidView({ (view.parent as? ViewGroup)?.removeView(view); view }, modifier)
+private fun <T : View> Placed(view: T, bw: Boolean = false, modifier: Modifier = Modifier) {
+    AndroidView(
+        factory = { (view.parent as? ViewGroup)?.removeView(view); view },
+        modifier = modifier,
+        update = { v ->
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                v.setRenderEffect(
+                    if (bw) android.graphics.RenderEffect.createColorFilterEffect(
+                        android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply { setSaturation(0f) })
+                    ) else null
+                )
+            }
+        },
+    )
 }
 
 /**
- * LiveView in the frame the picture will have, and over it the film OS's
- * screen while that is up. A tap focuses and meters there; a long-press locks both.
+ * LiveView in the frame the picture will have.
+ * A tap focuses and meters there; a long-press locks both.
  */
 @Composable
-private fun Finder(ui: Ui, preview: View, screen: View, on: Actions, ratio: Float, modifier: Modifier = Modifier) {
+private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: Modifier = Modifier) {
     Box(modifier.aspectRatio(ratio).background(Color.Black)) {
-        Placed(preview, Modifier.fillMaxSize())
-        if (ui.filmOs) Placed(screen, Modifier.fillMaxSize())
-        else {
-            val view = LocalView.current
-            val text = rememberTextMeasurer()
-            Canvas(Modifier.fillMaxSize().pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { at ->
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                        ui.focusLocked = false
-                        ui.focus = at
-                        on.focus(at.x, at.y)
-                    },
-                    onLongPress = { at ->
-                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                        ui.focusLocked = true
-                        ui.focus = at
-                        on.lockFocus(at.x, at.y)
-                    },
-                )
-            }) {
-                // where it focused: the corners of a frame, as a finder's are
-                val f = ui.focus ?: return@Canvas
-                val r = 26.dp.toPx()
-                val arm = 9.dp.toPx()
-                val w = if (ui.focusLocked) 2.2.dp.toPx() else 1.5.dp.toPx()
-                for (sx in listOf(-1f, 1f)) for (sy in listOf(-1f, 1f)) {
-                    val c = Offset(f.x + sx * r, f.y + sy * r)
-                    drawLine(Look.Amber, c, Offset(c.x - sx * arm, c.y), w)
-                    drawLine(Look.Amber, c, Offset(c.x, c.y - sy * arm), w)
-                }
-                if (ui.focusLocked) {
-                    val m = text.measure("AE/AF", engraved(10.sp, Look.Amber))
-                    val tx = (f.x - m.size.width / 2f).coerceIn(4.dp.toPx(), size.width - m.size.width - 4.dp.toPx())
-                    val ty = (f.y + r + 4.dp.toPx()).coerceAtMost(size.height - m.size.height - 4.dp.toPx())
-                    drawText(m, topLeft = Offset(tx, ty))
-                }
+        Placed(preview, bw = ui.bwPreview && ui.isBwFilm, modifier = Modifier.fillMaxSize())
+        val view = LocalView.current
+        val text = rememberTextMeasurer()
+        Canvas(Modifier.fillMaxSize().pointerInput(Unit) {
+            detectTapGestures(
+                onTap = { at ->
+                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    ui.focusLocked = false
+                    ui.focus = at
+                    on.focus(at.x, at.y)
+                },
+                onLongPress = { at ->
+                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    ui.focusLocked = true
+                    ui.focus = at
+                    on.lockFocus(at.x, at.y)
+                },
+            )
+        }) {
+            if (!ui.cleanFinder && ui.framelines) {
+                val inset = 14.dp.toPx()
+                val arm = 16.dp.toPx()
+                val lw = 1.dp.toPx()
+                val frameColor = Look.Ivory.copy(alpha = 0.35f)
+                val x0 = inset; val y0 = inset
+                val x1 = size.width - inset; val y1 = size.height - inset
+                // Rangefinder frame corners
+                drawLine(frameColor, Offset(x0, y0), Offset(x0 + arm, y0), lw)
+                drawLine(frameColor, Offset(x0, y0), Offset(x0, y0 + arm), lw)
+                drawLine(frameColor, Offset(x1, y0), Offset(x1 - arm, y0), lw)
+                drawLine(frameColor, Offset(x1, y0), Offset(x1, y0 + arm), lw)
+                drawLine(frameColor, Offset(x0, y1), Offset(x0 + arm, y1), lw)
+                drawLine(frameColor, Offset(x0, y1), Offset(x0, y1 - arm), lw)
+                drawLine(frameColor, Offset(x1, y1), Offset(x1 - arm, y1), lw)
+                drawLine(frameColor, Offset(x1, y1), Offset(x1, y1 - arm), lw)
+                // Center rangefinder patch ticks
+                val mx = size.width / 2f; val my = size.height / 2f
+                val cr = 8.dp.toPx()
+                drawLine(frameColor, Offset(mx - cr, my), Offset(mx + cr, my), lw)
+                drawLine(frameColor, Offset(mx, my - cr), Offset(mx, my + cr), lw)
             }
-            LaunchedEffect(ui.focus, ui.focusLocked) {
-                if (ui.focus != null && !ui.focusLocked) { delay(1200); ui.focus = null }
+            // where it focused: the corners of a frame, as a finder's are
+            val f = ui.focus ?: return@Canvas
+            val r = 26.dp.toPx()
+            val arm = 9.dp.toPx()
+            val w = if (ui.focusLocked) 2.2.dp.toPx() else 1.5.dp.toPx()
+            for (sx in listOf(-1f, 1f)) for (sy in listOf(-1f, 1f)) {
+                val c = Offset(f.x + sx * r, f.y + sy * r)
+                drawLine(Look.Amber, c, Offset(c.x - sx * arm, c.y), w)
+                drawLine(Look.Amber, c, Offset(c.x, c.y - sy * arm), w)
             }
+            if (ui.focusLocked) {
+                val m = text.measure("AE/AF", engraved(10.sp, Look.Amber))
+                val tx = (f.x - m.size.width / 2f).coerceIn(4.dp.toPx(), size.width - m.size.width - 4.dp.toPx())
+                val ty = (f.y + r + 4.dp.toPx()).coerceAtMost(size.height - m.size.height - 4.dp.toPx())
+                drawText(m, topLeft = Offset(tx, ty))
+            }
+        }
+        LaunchedEffect(ui.focus, ui.focusLocked) {
+            if (ui.focus != null && !ui.focusLocked) { delay(1200); ui.focus = null }
         }
     }
 }
 
 // ---------------------------------------------------------------- the camera, both ways up
 
-/** the film OS's keys shown while its own screens are up */
-private val OS_KEYS = listOf("Set" to Native.K_SET, "Menu" to Native.K_MENU, "Info" to Native.K_INFO, "Play" to Native.K_PLAY)
-
 @Composable
-fun CameraScreen(ui: Ui, preview: View, screen: View, on: Actions) {
+fun CameraScreen(ui: Ui, preview: View, on: Actions) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Look.Body).windowInsetsPadding(WindowInsets.displayCutout)) {
-        if (maxHeight > maxWidth) Upright(ui, preview, screen, on) else Level(ui, preview, screen, on)
+        if (maxHeight > maxWidth) Upright(ui, preview, on) else Level(ui, preview, on)
     }
 }
 
 /** Held as a camera: the thumb on the shutter and the exposure dial, the film at the other hand. */
 @Composable
-private fun Level(ui: Ui, preview: View, screen: View, on: Actions) {
+private fun Level(ui: Ui, preview: View, on: Actions) {
     val support: @Composable () -> Unit = {
         Column(
             Modifier.width(104.dp).fillMaxHeight().padding(horizontal = 8.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (!ui.filmOs) {
+            if (!ui.cleanFinder) {
                 FilmWindow(ui, Modifier.fillMaxWidth(), on.film)
                 if (ui.lenses.size > 1) LensRing(ui, onZoom = on.zoom)
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Key("Prints", onClick = on.prints)
                     DarkroomKey(ui.pendingRolls, onClick = on.darkroom)
+                    Key("Manual", color = Look.Dim, onClick = on.settings)
                 }
+            } else {
+                Spacer(Modifier.height(1.dp))
+                Key("Manual", color = Look.Dim, onClick = on.settings)
             }
         }
     }
     val grip: @Composable () -> Unit = {
         Row(Modifier.width(196.dp).fillMaxHeight().padding(vertical = 14.dp)) {
-            if (ui.leftHanded && !ui.filmOs) {
+            if (ui.leftHanded && !ui.cleanFinder) {
                 ExposureDial(ui, true, Modifier.padding(start = 10.dp).width(46.dp).fillMaxHeight(), on.exposure)
             }
             Column(
                 Modifier.weight(1f).fillMaxHeight(),
                 verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (ui.filmOs) Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    for ((name, k) in OS_KEYS) Key(name) { on.key(k) }
-                } else Counter(ui, on.counter)
+                Counter(ui, on.counter)
                 Shutter(96.dp, on)
-                if (ui.needWind && !ui.filmOs) WindLever(onWind = on.wind)
+                if (ui.needWind) WindLever(onWind = on.wind)
                 else Spacer(Modifier.height(48.dp))
             }
-            if (!ui.leftHanded && !ui.filmOs) {
+            if (!ui.leftHanded && !ui.cleanFinder) {
                 ExposureDial(ui, true, Modifier.padding(end = 10.dp).width(46.dp).fillMaxHeight(), on.exposure)
             }
         }
@@ -554,7 +590,7 @@ private fun Level(ui: Ui, preview: View, screen: View, on: Actions) {
     Row(Modifier.fillMaxSize()) {
         if (ui.leftHanded) grip() else support()
         Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-            Finder(ui, preview, screen, on, 3f / 2, Modifier.fillMaxHeight())
+            Finder(ui, preview, on, 3f / 2, Modifier.fillMaxHeight())
         }
         if (ui.leftHanded) support() else grip()
     }
@@ -562,41 +598,46 @@ private fun Level(ui: Ui, preview: View, screen: View, on: Actions) {
 
 /** Held upright, in one hand: everything touched is in the thumb's half, the top is only read. */
 @Composable
-private fun Upright(ui: Ui, preview: View, screen: View, on: Actions) {
+private fun Upright(ui: Ui, preview: View, on: Actions) {
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 18.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
         ) {
-            Label(if (ui.loaded) ui.film else "No film", size = 14.sp)
-            if (ui.loaded) Label("ISO ${ui.iso}", size = 14.sp, color = Look.Dim)
+            if (!ui.cleanFinder) {
+                Label(if (ui.loaded) ui.film else "No film", size = 14.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (ui.loaded) Label("ISO ${ui.iso}", size = 14.sp, color = Look.Dim)
+                    Key("Manual", color = Look.Dim, onClick = on.settings)
+                }
+            } else {
+                Spacer(Modifier.width(1.dp))
+                Key("Manual", color = Look.Dim, onClick = on.settings)
+            }
         }
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            // the portrait picture's frame; the film OS's screen is a landscape one
-            Finder(ui, preview, screen, on, if (ui.filmOs) 3f / 2 else 2f / 3)
+            Finder(ui, preview, on, 2f / 3)
         }
-        if (!ui.filmOs && ui.lenses.size > 1) {
+        if (!ui.cleanFinder && ui.lenses.size > 1) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 6.dp)) {
                 LensRing(ui, onZoom = on.zoom)
             }
         }
-        if (ui.filmOs) Row(Modifier.fillMaxWidth().height(52.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            for ((name, k) in OS_KEYS) Key(name) { on.key(k) }
-        } else ExposureDial(ui, false, Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(46.dp), on.exposure)
+        if (!ui.cleanFinder) {
+            ExposureDial(ui, false, Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(46.dp), on.exposure)
+        }
         Row(
             Modifier.fillMaxWidth().height(168.dp).padding(horizontal = 18.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.width(100.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (!ui.filmOs) {
-                    Counter(ui, on.counter)
-                    Key(if (ui.loaded) "Film" else "Load film", color = if (ui.loaded) Look.Ivory else Look.Amber, onClick = on.film)
-                }
+                Counter(ui, on.counter)
+                if (!ui.cleanFinder) Key(if (ui.loaded) "Film" else "Load film", color = if (ui.loaded) Look.Ivory else Look.Amber, onClick = on.film)
             }
             Shutter(104.dp, on)
             Column(Modifier.width(100.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (!ui.filmOs) {
-                    if (ui.needWind) WindLever(onWind = on.wind)
+                if (ui.needWind) WindLever(onWind = on.wind)
+                if (!ui.cleanFinder) {
                     Key("Prints", onClick = on.prints)
                     DarkroomKey(ui.pendingRolls, onClick = on.darkroom)
                 }

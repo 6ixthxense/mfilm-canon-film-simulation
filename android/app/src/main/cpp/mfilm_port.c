@@ -375,6 +375,9 @@ const char *fos_port_version() { return MFILM_VERSION; }
 #define FINISHED (roll.loaded && roll.shot >= roll.exposures)
 
 static int leds_until, end_due;
+static int next_fstop_x100 = 0;
+
+void mf_set_shot_fstop(int fstop_x100) { next_fstop_x100 = fstop_x100; }
 
 /* dng: the phone's own RAW (IMG_nnnn.DNG), or a CR2 made from its photo */
 static void shot_end(int dng)
@@ -383,7 +386,17 @@ static void shot_end(int dng)
     roll.shot++;
     char when[20], aperture[8], line[112];
     clock_str(when, sizeof(when), 1);
-    fos_format_fstop(aperture, sizeof(aperture), settings[FS_FSTOP]);
+    if (next_fstop_x100 > 0)
+    {
+        if (next_fstop_x100 % 100 == 0)
+            snprintf(aperture, sizeof(aperture), "%d", next_fstop_x100 / 100);
+        else
+            snprintf(aperture, sizeof(aperture), "%d.%d", next_fstop_x100 / 100, (next_fstop_x100 / 10) % 10);
+    }
+    else
+    {
+        fos_format_fstop(aperture, sizeof(aperture), settings[FS_FSTOP]);
+    }
     snprintf(line, sizeof(line), "%d  IMG_%04d.%s  %s:00  f/%s\n", roll.shot, file_no, dng ? "DNG" : "CR2", when, aperture);
     log_append(line);
 
@@ -512,6 +525,233 @@ int mf_roll_frames(char *out, int out_size)
     return n;
 }
 
+int mf_get_setting(int id)
+{
+    return (id >= 0 && id < FS_COUNT) ? settings[id] : 0;
+}
+
+void mf_set_setting(int id, int val)
+{
+    if (id >= 0 && id < FS_COUNT)
+    {
+        settings[id] = val;
+        if (id == FS_WIND && !val) need_wind = 0;
+        save_state();
+    }
+}
+
+int mf_lab_rolls(char *out, int out_size)
+{
+    if (!out || out_size <= 0) return 0;
+    out[0] = 0;
+    struct fos_lab_roll rolls[32];
+    int n = fos_lab_scan(rolls, 32);
+    int pos = 0;
+    for (int i = 0; i < n && pos < out_size - 1; i++)
+    {
+        const struct fos_lab_roll *r = &rolls[i];
+        const char *fname = (r->film >= 0 && r->film < fos_nfilms) ? fos_films[r->film].name : r->gone;
+        int wrote = snprintf(out + pos, (size_t) (out_size - pos), "%d|%d|%s|%d|%d|%d|%d|%d|%d|%s|%s\n",
+                             r->number, r->film, fname ? fname : "", r->exposures, r->shot,
+                             r->developed, r->sheet, r->jpegs, r->in_camera, r->loaded, r->last);
+        if (wrote < 0 || pos + wrote >= out_size) break;
+        pos += wrote;
+    }
+    return n;
+}
+
+int mf_lab_roll_prints(int roll_no, char *out, int out_size)
+{
+    if (!out || out_size <= 0) return 0;
+    out[0] = 0;
+    struct fos_lab_roll rolls[32];
+    int nrolls = fos_lab_scan(rolls, 32);
+    int film_idx = -1;
+    for (int i = 0; i < nrolls; i++)
+        if (rolls[i].number == roll_no) { film_idx = rolls[i].film; break; }
+
+    struct fos_lab_frame frames[64];
+    int n = fos_lab_frames(roll_no, frames, 64);
+    const char *first = 0;
+    for (int i = 0; i < n; i++)
+        if (frames[i].when[0] && (!first || strcmp(frames[i].when, first) < 0)) first = frames[i].when;
+
+    char dcim_dir[160] = "";
+    if (film_idx >= 0) fos_lab_dcim_dir(dcim_dir, sizeof(dcim_dir), roll_no, film_idx, first);
+
+    int pos = 0;
+    for (int i = 0; i < n && pos < out_size - 1; i++)
+    {
+        const struct fos_lab_frame *f = &frames[i];
+        char jpeg[256] = "";
+        if (dcim_dir[0] && f->cr2[0])
+        {
+            const char *base = strrchr(f->cr2, '/');
+            char name[9];
+            fos_copy(name, sizeof(name), base ? base + 1 : f->cr2, 8);
+            snprintf(jpeg, sizeof(jpeg), "%s%s/%s.JPG", card, dcim_dir, name);
+            struct stat st;
+            if (stat(jpeg, &st) != 0) jpeg[0] = 0;
+        }
+        int wrote = snprintf(out + pos, (size_t) (out_size - pos), "%d|%s|%s|%s\n",
+                             f->no, f->when, f->fstop, jpeg);
+        if (wrote < 0 || pos + wrote >= out_size) break;
+        pos += wrote;
+    }
+    return n;
+}
+
+int mf_lab_delete(int roll_no, int whole)
+{
+    struct fos_lab_frame frames[FOS_MAX_FRAMES];
+    return fos_lab_delete(roll_no, whole, frames);
+}
+
+/* ---------------------------------------------------------------- darkroom session */
+
+static struct fos_dev *dk_dev = 0;
+static struct fos_lab_frame dk_frames[64];
+static int dk_nframes = 0;
+static int dk_fi = 0;
+static int dk_done = 0;
+static int dk_roll = 0;
+static int dk_film = 0;
+static int dk_size = 0;
+static char dk_dcim[160] = "";
+
+void mf_dev_close(void)
+{
+    if (dk_dev) { fos_dev_free(dk_dev); dk_dev = 0; }
+    fos_dev_release();
+    dk_nframes = 0;
+    dk_fi = 0;
+    dk_done = 0;
+}
+
+int mf_dev_open(int roll_no, int size)
+{
+    mf_dev_close();
+    struct fos_lab_roll rolls[32];
+    int nrolls = fos_lab_scan(rolls, 32);
+    int film = -1;
+    for (int i = 0; i < nrolls; i++)
+        if (rolls[i].number == roll_no) { film = rolls[i].film; break; }
+    if (film < 0 || film >= fos_nfilms) return -1;
+
+    dk_roll = roll_no;
+    dk_film = film;
+    dk_size = fos_clamp(size, 0, FOS_SIZES - 1);
+    dk_nframes = fos_lab_frames(roll_no, dk_frames, 64);
+    if (dk_nframes <= 0) return 0;
+
+    fos_lab_prepare(roll_no);
+    const char *first = 0;
+    for (int i = 0; i < dk_nframes; i++)
+        if (dk_frames[i].when[0] && (!first || strcmp(dk_frames[i].when, first) < 0)) first = dk_frames[i].when;
+    if (fos_lab_dcim_dir(dk_dcim, sizeof(dk_dcim), roll_no, film, first) < 0) dk_dcim[0] = 0;
+
+    /* wait if a CR2 is still being written on the card */
+    for (int w = 0; cr2_pending > 0 && w < 10000; w += 100) sleep_ms(100);
+    return dk_nframes;
+}
+
+int mf_dev_step(int budget_ms, int out[3])
+{
+    out[0] = 0; out[1] = dk_done; out[2] = 0;
+    if (!dk_dev)
+    {
+        while (dk_fi < dk_nframes)
+        {
+            const struct fos_lab_frame *f = &dk_frames[dk_fi++];
+            char path[64], jpeg[220] = "";
+            fos_lab_print_path(path, sizeof(path), dk_roll, f->no);
+            if (dk_dcim[0])
+            {
+                const char *base = strrchr(f->cr2, '/');
+                char name[9];
+                fos_copy(name, sizeof(name), base ? base + 1 : f->cr2, 8);
+                snprintf(jpeg, sizeof(jpeg), "%s/%s.JPG", dk_dcim, name);
+            }
+            struct stat st1, st2;
+            char full_prn[300], full_jpg[300];
+            snprintf(full_prn, sizeof(full_prn), "%s%s", card, path);
+            snprintf(full_jpg, sizeof(full_jpg), "%s%s", card, jpeg);
+            if (stat(full_prn, &st1) == 0 && (!jpeg[0] || f->missing || stat(full_jpg, &st2) == 0))
+            {
+                dk_done++;
+                continue;
+            }
+            if (f->missing) { dk_done++; continue; }
+            dk_dev = fos_dev_start(f->cr2, path, dk_film, f->no, f->when, f->fstop);
+            if (dk_dev && jpeg[0]) fos_dev_jpeg(dk_dev, jpeg);
+            if (dk_dev && dk_size > FOS_SIZE_S)
+            {
+                char zoom[64];
+                fos_lab_zoom_path(zoom, sizeof(zoom), dk_roll, f->no);
+                fos_dev_big(dk_dev, dk_size, zoom);
+            }
+            if (dk_dev && settings[FS_STAMP]) fos_dev_stamp(dk_dev, 1);
+            if (dk_dev) break;
+            dk_done++;
+        }
+        if (!dk_dev)
+        {
+            /* contact sheet */
+            char paths[64][64];
+            const char *pp[64];
+            for (int i = 0; i < dk_nframes && i < 64; i++)
+            {
+                fos_lab_print_path(paths[i], sizeof(paths[i]), dk_roll, dk_frames[i].no);
+                pp[i] = paths[i];
+            }
+            char sheet_path[64];
+            fos_lab_print_path(sheet_path, sizeof(sheet_path), dk_roll, 0);
+            fos_dev_sheet(sheet_path, dk_film, pp, dk_nframes);
+            out[1] = dk_done;
+            mf_dev_close();
+            post_event(MF_EV_DEVELOPING, 0, 0);
+            return 0;
+        }
+    }
+
+    int prog = fos_dev_step(dk_dev, budget_ms);
+    int doing = fos_dev_doing(dk_dev);
+    out[0] = dk_frames[dk_fi - 1].no;
+    out[1] = dk_done;
+    out[2] = fos_clamp(prog, 0, 1000);
+    if (doing == FOS_DEV_DONE || doing == FOS_DEV_FAILED)
+    {
+        fos_dev_free(dk_dev);
+        dk_dev = 0;
+        dk_done++;
+        out[1] = dk_done;
+        out[2] = 1000;
+    }
+    return 1;
+}
+
+int mf_dev_preview_bmp(uint32_t *argb, int w, int h)
+{
+    if (!dk_dev || w <= 0 || h <= 0) return 0;
+    uint8_t *lum = malloc((size_t) w * h);
+    if (!lum) return 0;
+    int ok = fos_dev_preview(dk_dev, lum, w, h);
+    if (ok)
+    {
+        for (int i = 0; i < w * h; i++)
+        {
+            /* safelight red-amber paper preview */
+            uint32_t v = lum[i];
+            uint32_t r = v;
+            uint32_t g = v * 32 / 255;
+            uint32_t b = v * 16 / 255;
+            argb[i] = 0xFF000000u | (r << 16) | (g << 8) | b;
+        }
+    }
+    free(lum);
+    return ok;
+}
+
 /* ---------------------------------------------------------------- LiveView */
 
 static struct fos_hud_palette hud_pal;
@@ -629,13 +869,11 @@ static void shutter(void)
 
 void mf_run(void)
 {
-    int boot = 1;
     for (;;)
     {
         int now = now_ms();
         int o = -1, fire = 0, done = 0;
         pthread_mutex_lock(&in_lock);
-        if (boot) { open_req = FOS_OPEN_BOOT; boot = 0; }
         o = open_req; open_req = -1;
         fire = shutter_req; shutter_req = 0;
         done = shot_done_req; shot_done_req = 0;
@@ -645,11 +883,6 @@ void mf_run(void)
         {
             if (done > 0) shot_end(done == 2);
             shot_pending = 0;
-        }
-        if (end_due && now > end_due && FINISHED && !half_press && !shot_pending)
-        {
-            end_due = 0;
-            o = FOS_OPEN_END;
         }
         if (o >= 0 && !shot_pending)
         {

@@ -7,12 +7,12 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -27,28 +27,28 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 private val SHELF_WOOD = Color(0xFF1E150F)
@@ -119,14 +119,22 @@ private fun SpecBar(label: String, value: Int) {
 @Composable
 fun ShelfScreen(ui: Ui, onLoad: (Int, Int) -> Unit, onOpenRoll: () -> Unit, onBack: () -> Unit) {
     val view = LocalView.current
+    val scope = rememberCoroutineScope()
     val catalog = remember { loadFilmCatalog() }
     var group by remember { mutableIntStateOf(0) }
     val shelfFilms = remember(catalog, group) { catalog.filter { it.group == group } }
-    var pos by remember(group) { mutableIntStateOf(0) }
-    var leaderOut by remember(group, pos) { mutableStateOf(false) }
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { shelfFilms.size })
+    var leaderOut by remember(group, pagerState.currentPage) { mutableStateOf(false) }
     var exp by remember { mutableIntStateOf(36) }
 
-    val selected = shelfFilms.getOrNull(pos.coerceIn(0, (shelfFilms.size - 1).coerceAtLeast(0)))
+    LaunchedEffect(group) {
+        if (shelfFilms.isNotEmpty()) pagerState.scrollToPage(0)
+    }
+    LaunchedEffect(pagerState.settledPage) {
+        if (shelfFilms.isNotEmpty()) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+    }
+
+    val selected = shelfFilms.getOrNull(pagerState.currentPage)
 
     Column(
         Modifier.fillMaxSize().background(Look.Body).windowInsetsPadding(WindowInsets.displayCutout).padding(16.dp),
@@ -139,38 +147,17 @@ fun ShelfScreen(ui: Ui, onLoad: (Int, Int) -> Unit, onOpenRoll: () -> Unit, onBa
                 GROUPS.forEachIndexed { idx, name ->
                     Key(name, color = if (idx == group) Look.Amber else Look.Dim) {
                         group = idx
-                        pos = 0
                         leaderOut = false
                     }
                 }
             }
         }
 
-        // shelf area: vertical swipe changes shelf, horizontal swipe steps canisters
+        // shelf area: vertical swipe changes shelf, HorizontalPager glides between canisters
         Box(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .pointerInput(group, shelfFilms.size) {
-                    var dx = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { dx = 0f },
-                    ) { change, drag ->
-                        change.consume()
-                        dx += drag
-                        val step = 56.dp.toPx()
-                        while (abs(dx) >= step && shelfFilms.isNotEmpty()) {
-                            val dir = if (dx > 0) -1 else 1
-                            dx += dir * step
-                            val next = (pos + dir).coerceIn(0, shelfFilms.lastIndex)
-                            if (next != pos) {
-                                pos = next
-                                leaderOut = false
-                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                            }
-                        }
-                    }
-                }
                 .pointerInput(Unit) {
                     var dy = 0f
                     detectVerticalDragGestures(
@@ -184,7 +171,6 @@ fun ShelfScreen(ui: Ui, onLoad: (Int, Int) -> Unit, onOpenRoll: () -> Unit, onBa
                             dy = 0f
                             if (next != group) {
                                 group = next
-                                pos = 0
                                 leaderOut = false
                                 view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                             }
@@ -197,44 +183,44 @@ fun ShelfScreen(ui: Ui, onLoad: (Int, Int) -> Unit, onOpenRoll: () -> Unit, onBa
                 Label("Empty shelf", color = Look.Dim)
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    HorizontalPager(
+                        state = pagerState,
+                        contentPadding = PaddingValues(horizontal = 88.dp),
+                        modifier = Modifier.fillMaxWidth().height(180.dp),
                         verticalAlignment = Alignment.Bottom,
-                    ) {
-                        val prev = shelfFilms.getOrNull(pos - 1)
-                        val next = shelfFilms.getOrNull(pos + 1)
-
-                        Box(Modifier.width(84.dp), contentAlignment = Alignment.Center) {
-                            if (prev != null) {
-                                Box(Modifier.clickable(remember { MutableInteractionSource() }, indication = null) {
-                                    pos -= 1; leaderOut = false
-                                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                                }) {
-                                    CanisterBitmap(prev.index, exp, false, Modifier.size(96.dp, 84.dp))
+                    ) { page ->
+                        val film = shelfFilms[page]
+                        val isCenter = page == pagerState.currentPage
+                        val off = abs((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
+                        val scale = 1f - 0.34f * off
+                        val inCamera = ui.loaded && film.name == ui.film
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    scaleX = scale
+                                    scaleY = scale
+                                    alpha = 1f - 0.45f * off
                                 }
-                            }
-                        }
-
-                        Box(
-                            Modifier.clickable(remember { MutableInteractionSource() }, indication = null, role = Role.Button) {
-                                leaderOut = !leaderOut
-                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                            },
-                            contentAlignment = Alignment.Center,
+                                .clickable(remember { MutableInteractionSource() }, indication = null, role = Role.Button) {
+                                    if (isCenter) {
+                                        leaderOut = !leaderOut
+                                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                    } else {
+                                        scope.launch { pagerState.animateScrollToPage(page) }
+                                    }
+                                },
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            CanisterBitmap(selected.index, exp, leaderOut, Modifier.size(196.dp, 166.dp))
-                        }
-
-                        Box(Modifier.width(84.dp), contentAlignment = Alignment.Center) {
-                            if (next != null) {
-                                Box(Modifier.clickable(remember { MutableInteractionSource() }, indication = null) {
-                                    pos += 1; leaderOut = false
-                                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                                }) {
-                                    CanisterBitmap(next.index, exp, false, Modifier.size(96.dp, 84.dp))
-                                }
+                            if (inCamera) {
+                                Label("IN CAMERA", size = 10.sp, color = Look.Amber)
                             }
+                            CanisterBitmap(
+                                film.index,
+                                exp,
+                                isCenter && leaderOut,
+                                Modifier.size(196.dp, 160.dp),
+                            )
                         }
                     }
 
@@ -245,7 +231,7 @@ fun ShelfScreen(ui: Ui, onLoad: (Int, Int) -> Unit, onOpenRoll: () -> Unit, onBa
                     // film title + specs
                     Label(selected.name, size = 18.sp, color = Look.Ivory)
                     Spacer(Modifier.height(4.dp))
-                    Label("ISO ${selected.iso}  ·  ${pos + 1} OF ${shelfFilms.size}", size = 12.sp, color = Look.Dim)
+                    Label("ISO ${selected.iso}  ·  ${pagerState.currentPage + 1} OF ${shelfFilms.size}", size = 12.sp, color = Look.Dim)
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         SpecBar("GRN", selected.grain)
