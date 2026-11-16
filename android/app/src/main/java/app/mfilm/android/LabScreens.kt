@@ -4,13 +4,19 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.Typeface
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import java.io.FileOutputStream
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,6 +66,7 @@ import kotlin.math.abs
 private val SAFELIGHT = Color(0xFFD92B1C)
 private val SAFELIGHT_DIM = Color(0xFF5C150E)
 private val PRINT_SIZES = listOf("S" to 0, "M" to 1, "L" to 2)
+private val PUSH_STOPS = listOf("-1" to -1, "0" to 0, "+1" to 1)
 
 data class LabRoll(
     val number: Int,
@@ -122,7 +129,7 @@ fun parseRollPrints(raw: String): List<PrintItem> {
  */
 @Composable
 fun DarkroomScreen(
-    onDevelop: (Int, Int) -> Unit,
+    onDevelop: (Int, Int, Int) -> Unit,
     onCancel: () -> Unit,
     onOpenPrints: (Int) -> Unit,
     onBack: () -> Unit,
@@ -131,6 +138,7 @@ fun DarkroomScreen(
     var rolls by remember { mutableStateOf<List<LabRoll>>(emptyList()) }
     var selectedRoll by remember { mutableIntStateOf(-1) }
     var printSize by remember { mutableIntStateOf(0) }
+    var pushStops by remember { mutableIntStateOf(0) }
     var deleteAsk by remember { mutableStateOf(false) }
 
     LaunchedEffect(DevelopState.running) {
@@ -277,26 +285,37 @@ fun DarkroomScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             if (sel.isWaiting) {
-                                Row(
-                                    Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    PRINT_SIZES.forEachIndexed { idx, (label, sz) ->
-                                        if (idx > 0) Label("·", size = 12.sp, color = SAFELIGHT_DIM)
-                                        Key(label, color = if (printSize == sz) SAFELIGHT else SAFELIGHT_DIM) { printSize = sz }
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Row(
+                                        Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        PRINT_SIZES.forEachIndexed { idx, (label, sz) ->
+                                            if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
+                                            Key(label, modifier = Modifier.defaultMinSize(32.dp, 42.dp), color = if (printSize == sz) SAFELIGHT else SAFELIGHT_DIM) { printSize = sz }
+                                        }
+                                    }
+                                    Row(
+                                        Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        PUSH_STOPS.forEachIndexed { idx, (label, ev) ->
+                                            if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
+                                            Key(label, modifier = Modifier.defaultMinSize(32.dp, 42.dp), color = if (pushStops == ev) SAFELIGHT else SAFELIGHT_DIM) { pushStops = ev }
+                                        }
                                     }
                                 }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    if (!sel.inCamera) Key("Delete", color = SAFELIGHT_DIM) { deleteAsk = true }
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    if (!sel.inCamera) Key("Del", modifier = Modifier.defaultMinSize(40.dp, 42.dp), color = SAFELIGHT_DIM) { deleteAsk = true }
                                     Box(
                                         Modifier
-                                            .defaultMinSize(108.dp, 48.dp)
+                                            .defaultMinSize(88.dp, 46.dp)
                                             .border(1.dp, SAFELIGHT, RoundedCornerShape(3.dp))
                                             .clickable {
                                                 view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                                                onDevelop(sel.number, printSize)
+                                                onDevelop(sel.number, printSize, pushStops)
                                             }
-                                            .padding(horizontal = 16.dp),
+                                            .padding(horizontal = 12.dp),
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         Label("Develop", size = 13.sp, color = SAFELIGHT)
@@ -342,8 +361,11 @@ fun PrintsScreen(initialRoll: Int, onBack: () -> Unit) {
         prints = if (rollNo > 0) parseRollPrints(Native.labRollPrints(rollNo)).filter { it.jpegPath.isNotBlank() } else emptyList()
     }
 
+    val currentRoll = rolls.find { it.number == rollNo }
+
     if (lightboxIdx in prints.indices) {
         Lightbox(
+            roll = currentRoll,
             prints = prints,
             index = lightboxIdx,
             onIndex = { lightboxIdx = it },
@@ -359,7 +381,11 @@ fun PrintsScreen(initialRoll: Int, onBack: () -> Unit) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Key("← Back", onClick = onBack)
             Label(if (rollNo > 0) "PRINTS · ROLL %03d".format(rollNo) else "PRINTS", size = 14.sp, color = Look.Ivory)
-            Spacer(Modifier.width(56.dp))
+            if (prints.isNotEmpty()) {
+                Key("Sheet", color = Look.Amber) { shareContactSheet(context, currentRoll, prints) }
+            } else {
+                Spacer(Modifier.width(56.dp))
+            }
         }
 
         if (rolls.size > 1) {
@@ -416,6 +442,7 @@ fun PrintsScreen(initialRoll: Int, onBack: () -> Unit) {
 
 @Composable
 private fun Lightbox(
+    roll: LabRoll?,
     prints: List<PrintItem>,
     index: Int,
     onIndex: (Int) -> Unit,
@@ -423,9 +450,15 @@ private fun Lightbox(
     onClose: () -> Unit,
 ) {
     val item = prints[index]
+    val dims = remember(item.jpegPath) {
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(item.jpegPath, o)
+        "${o.outWidth}×${o.outHeight}"
+    }
     val bmp = remember(item.jpegPath) { decodeThumb(item.jpegPath, 1920) }
     var scale by remember(index) { mutableFloatStateOf(1f) }
     var pan by remember(index) { mutableStateOf(Offset.Zero) }
+    var showInfo by remember { mutableStateOf(true) }
 
     Column(
         Modifier.fillMaxSize().background(Color.Black).windowInsetsPadding(WindowInsets.displayCutout).padding(12.dp),
@@ -440,6 +473,9 @@ private fun Lightbox(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .pointerInput(index) {
+                    detectTapGestures(onTap = { showInfo = !showInfo })
+                }
                 .pointerInput(index, prints.size) {
                     detectTransformGestures { _, drag, zoom, _ ->
                         val nextScale = (scale * zoom).coerceIn(1f, 5f)
@@ -475,8 +511,89 @@ private fun Lightbox(
                     contentScale = ContentScale.Fit,
                 )
             }
+            if (showInfo) {
+                Row(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Color(0xCC0A0A09))
+                        .border(0.5.dp, Look.Plate)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Label(roll?.filmName ?: "M-FILM", size = 11.sp, color = Look.Amber)
+                    Label("${item.whenStr}  ·  ${item.fstop.ifBlank { "—" }}  ·  $dims", size = 11.sp, color = Look.Ivory)
+                }
+            }
         }
     }
+}
+
+private fun shareContactSheet(context: Context, roll: LabRoll?, prints: List<PrintItem>) {
+    if (prints.isEmpty()) return
+    val cols = 6
+    val rows = (prints.size + cols - 1) / cols
+    val pad = 44
+    val gap = 24
+    val cellW = 360
+    val cellH = 240
+    val headerH = 96
+    val stripH = cellH + 56
+    val w = pad * 2 + cols * cellW + (cols - 1) * gap
+    val h = headerH + pad + rows * stripH
+
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val c = AndroidCanvas(bmp)
+    c.drawColor(0xFF0A0A09.toInt())
+
+    val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFECA834.toInt()
+        textSize = 34f
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    }
+    val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFD8CFC0.toInt()
+        textSize = 22f
+        typeface = Typeface.MONOSPACE
+    }
+    val numPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFECA834.toInt()
+        textSize = 20f
+        typeface = Typeface.MONOSPACE
+    }
+    val holePaint = Paint().apply { color = 0xFF1A1816.toInt() }
+
+    val title = "ROLL %03d · %s".format(roll?.number ?: 0, (roll?.filmName ?: "M-FILM").uppercase())
+    c.drawText(title, pad.toFloat(), 58f, titlePaint)
+    val sub = "${prints.size} FRAMES · ${roll?.loaded?.take(10) ?: ""}"
+    c.drawText(sub, w - pad - subPaint.measureText(sub), 58f, subPaint)
+
+    prints.forEachIndexed { idx, item ->
+        val col = idx % cols
+        val row = idx / cols
+        val x = pad + col * (cellW + gap)
+        val y = headerH + row * stripH
+        if (col == 0) {
+            // sprocket holes along strip top
+            var sx = pad
+            while (sx < w - pad) {
+                c.drawRect(sx.toFloat(), (y - 16).toFloat(), (sx + 14).toFloat(), (y - 6).toFloat(), holePaint)
+                sx += 32
+            }
+        }
+        val thumb = decodeThumb(item.jpegPath, cellW)
+        if (thumb != null) {
+            c.drawBitmap(thumb, null, Rect(x, y, x + cellW, y + cellH), null)
+            thumb.recycle()
+        }
+        c.drawText("#%02d  %s".format(item.no, item.fstop), x.toFloat(), (y + cellH + 26).toFloat(), numPaint)
+    }
+
+    val outFile = File(context.cacheDir, "contact_sheet_${roll?.number ?: 0}.jpg")
+    FileOutputStream(outFile).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+    bmp.recycle()
+    shareJpeg(context, outFile.absolutePath)
 }
 
 private fun decodeThumb(path: String, maxDim: Int): Bitmap? {
@@ -506,6 +623,7 @@ private fun shareJpeg(context: Context, path: String) {
 @Composable
 fun SettingsScreen(
     ui: Ui,
+    onToggleShooting: () -> Unit,
     onToggleWind: () -> Unit,
     onToggleFinder: () -> Unit,
     onToggleFramelines: () -> Unit,
@@ -525,6 +643,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(18.dp))
 
+        SettingRow("SHOOTING", if (ui.singleShot) "SINGLE (AUTO-DEV)" else "ROLL (12/24/36)", onToggleShooting)
         SettingRow("FILM ADVANCE", if (ui.realisticWind) "REALISTIC (WIND ON)" else "AUTO", onToggleWind)
         SettingRow("VIEWFINDER", if (ui.cleanFinder) "CLEAN" else "INFO", onToggleFinder)
         SettingRow("FRAMELINES", if (ui.framelines) "ON" else "OFF", onToggleFramelines)

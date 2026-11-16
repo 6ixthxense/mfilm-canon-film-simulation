@@ -341,6 +341,7 @@ struct fos_dev
     char jpeg[160];                     /* the full-colour frame as a JPEG too, or "" */
     int film, frame;
     const struct fos_look *look;
+    float push_ev;
     int stage, row;                     /* row: progress through a per-row stage */
     const char *err;
     char errbuf[72];
@@ -2020,6 +2021,11 @@ void fos_dev_stamp(struct fos_dev *d, int on)
     if (d) d->stamp = on;
 }
 
+void fos_dev_push(struct fos_dev *d, float ev)
+{
+    if (d) d->push_ev = ev;
+}
+
 int fos_dev_made(const struct fos_dev *d, int *w, int *h)
 {
     int pw = d && d->rows_axis_x ? d->ow : FOS_PRINT_W;
@@ -2189,7 +2195,7 @@ static void stage_key(struct fos_dev *d)
     /* The film stock's balance is not applied here any more: the frame comes
      * balanced as the camera was, and loading a roll put the camera on the
      * film stock's Kelvin. Shifting again would count it twice (#115). */
-    float k = exp2f(ev + d->look->ev);
+    float k = exp2f(ev + d->look->ev + d->push_ev);
 #ifdef FOS_DEV_TEST
     /* FOS_EV: the scanner's exposure held from outside, in stops: the whole
      * of what the picture is multiplied by before the film stock, the film

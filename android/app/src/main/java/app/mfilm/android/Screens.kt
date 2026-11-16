@@ -117,7 +117,13 @@ private fun SpecBar(label: String, value: Int) {
  * then pick 12 / 24 / 36 exposures and load.
  */
 @Composable
-fun ShelfScreen(ui: Ui, onLoad: (Int, Int) -> Unit, onOpenRoll: () -> Unit, onBack: () -> Unit) {
+fun ShelfScreen(
+    ui: Ui,
+    onLoad: (Int, Int) -> Unit,
+    onSwitchFilm: (Int) -> Unit,
+    onOpenRoll: () -> Unit,
+    onBack: () -> Unit,
+) {
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val catalog = remember { loadFilmCatalog() }
@@ -204,8 +210,13 @@ fun ShelfScreen(ui: Ui, onLoad: (Int, Int) -> Unit, onOpenRoll: () -> Unit, onBa
                                 }
                                 .clickable(remember { MutableInteractionSource() }, indication = null, role = Role.Button) {
                                     if (isCenter) {
-                                        leaderOut = !leaderOut
-                                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                        if (ui.singleShot) {
+                                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                            onSwitchFilm(film.index)
+                                        } else {
+                                            leaderOut = !leaderOut
+                                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                        }
                                     } else {
                                         scope.launch { pagerState.animateScrollToPage(page) }
                                     }
@@ -243,9 +254,28 @@ fun ShelfScreen(ui: Ui, onLoad: (Int, Int) -> Unit, onOpenRoll: () -> Unit, onBa
             }
         }
 
-        // bottom action bar: tap canister to pull leader, then pick 12/24/36 and load
+        // bottom action bar: in SINGLE mode switch immediately; in ROLL mode pull leader and pick 12/24/36
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            if (ui.loaded) {
+            if (ui.singleShot && selected != null) {
+                Box(
+                    Modifier
+                        .defaultMinSize(136.dp, 48.dp)
+                        .background(Look.Plate, RoundedCornerShape(3.dp))
+                        .border(1.dp, Look.Amber, RoundedCornerShape(3.dp))
+                        .clickable {
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            onSwitchFilm(selected.index)
+                        }
+                        .padding(horizontal = 18.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Label(
+                        if (ui.loaded && selected.name == ui.film) "Active film" else "Use ${selected.name}",
+                        size = 13.sp,
+                        color = Look.Amber,
+                    )
+                }
+            } else if (ui.loaded) {
                 Row(
                     Modifier
                         .fillMaxWidth()

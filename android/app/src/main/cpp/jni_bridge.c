@@ -13,7 +13,6 @@ static void alog(const char *msg) { __android_log_print(ANDROID_LOG_INFO, "mfilm
 
 static pthread_t fos_thread;
 static int started;
-static uint32_t frame_buf[MF_W * MF_H];
 
 static void *run(void *arg) { mf_run(); return 0; }
 
@@ -36,14 +35,12 @@ JNIEXPORT jint JNICALL FN(start)(JNIEnv *env, jclass cls, jstring files, jstring
 }
 
 JNIEXPORT jboolean JNICALL FN(started)(JNIEnv *env, jclass cls) { return started; }
-JNIEXPORT void JNICALL FN(key)(JNIEnv *env, jclass cls, jint k) { mf_key(k); }
 JNIEXPORT void JNICALL FN(half)(JNIEnv *env, jclass cls, jboolean down) { mf_half(down); }
 JNIEXPORT void JNICALL FN(shutter)(JNIEnv *env, jclass cls) { mf_shutter(); }
+JNIEXPORT void JNICALL FN(wind)(JNIEnv *env, jclass cls) { mf_wind(); }
 JNIEXPORT void JNICALL FN(shotDone)(JNIEnv *env, jclass cls, jboolean ok, jboolean dng) { mf_shot_done(ok, dng); }
 JNIEXPORT void JNICALL FN(setPending)(JNIEnv *env, jclass cls, jint n) { mf_set_pending(n); }
-JNIEXPORT void JNICALL FN(openScreen)(JNIEnv *env, jclass cls, jint screen) { mf_open(screen); }
 JNIEXPORT void JNICALL FN(battery)(JNIEnv *env, jclass cls, jint pct) { mf_battery(pct); }
-JNIEXPORT jboolean JNICALL FN(uiRunning)(JNIEnv *env, jclass cls) { return mf_ui_running() != 0; }
 
 /* out: what, a, b */
 JNIEXPORT jboolean JNICALL FN(pollEvent)(JNIEnv *env, jclass cls, jintArray out)
@@ -54,37 +51,19 @@ JNIEXPORT jboolean JNICALL FN(pollEvent)(JNIEnv *env, jclass cls, jintArray out)
     return JNI_TRUE;
 }
 
-/* the screen into a 720 x 480 ARGB_8888 bitmap, if it changed */
-JNIEXPORT jboolean JNICALL FN(frame)(JNIEnv *env, jclass cls, jobject bitmap, jboolean force)
-{
-    if (!started || !mf_frame(frame_buf, force)) return JNI_FALSE;
-    AndroidBitmapInfo info;
-    void *px;
-    if (AndroidBitmap_getInfo(env, bitmap, &info) < 0 || info.width != MF_W || info.height != MF_H ||
-        info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || AndroidBitmap_lockPixels(env, bitmap, &px) < 0)
-        return JNI_FALSE;
-    for (int y = 0; y < MF_H; y++)
-    {
-        uint32_t *row = (uint32_t *) ((uint8_t *) px + (size_t) y * info.stride);
-        const uint32_t *src = frame_buf + y * MF_W;
-        for (int x = 0; x < MF_W; x++)
-        {
-            uint32_t c = src[x];        /* 0xAARRGGBB -> bytes R, G, B, A */
-            row[x] = (c & 0xFF00FF00u) | (c >> 16 & 0xFF) | (c & 0xFF) << 16;
-        }
-    }
-    AndroidBitmap_unlockPixels(env, bitmap);
-    return JNI_TRUE;
-}
-
-/* out: loaded, shot, exposures; returns the film's name */
+/* out: loaded, shot, exposures, need_wind, iso, roll_number; returns the film's name */
 JNIEXPORT jstring JNICALL FN(rollInfo)(JNIEnv *env, jclass cls, jintArray out)
 {
-    int r[5];
+    int r[6];
     char film[64];
     mf_roll_info(r, film, sizeof(film));
-    (*env)->SetIntArrayRegion(env, out, 0, 5, r);
+    (*env)->SetIntArrayRegion(env, out, 0, 6, r);
     return (*env)->NewStringUTF(env, film);
+}
+
+JNIEXPORT void JNICALL FN(switchFilm)(JNIEnv *env, jclass cls, jint film, jboolean singleMode)
+{
+    mf_switch_film(film, singleMode ? 1 : 0);
 }
 
 JNIEXPORT jint JNICALL FN(pendingRolls)(JNIEnv *env, jclass cls)
@@ -187,9 +166,9 @@ JNIEXPORT jint JNICALL FN(labDelete)(JNIEnv *env, jclass cls, jint rollNo, jbool
     return mf_lab_delete(rollNo, whole ? 1 : 0);
 }
 
-JNIEXPORT jint JNICALL FN(devOpen)(JNIEnv *env, jclass cls, jint rollNo, jint size)
+JNIEXPORT jint JNICALL FN(devOpen)(JNIEnv *env, jclass cls, jint rollNo, jint size, jint pushStops, jint targetFrame)
 {
-    return mf_dev_open(rollNo, size);
+    return mf_dev_open(rollNo, size, pushStops, targetFrame);
 }
 
 JNIEXPORT jint JNICALL FN(devStep)(JNIEnv *env, jclass cls, jint budgetMs, jintArray out)

@@ -125,6 +125,8 @@ void fos_dev_big(struct fos_dev *d, int size, const char *zoom);
 int  fos_dev_made(const struct fos_dev *d, int *w, int *h);     /* FOS_SIZE_*, and the JPEG's size */
 /* the date in the corner of the print, from when (before the first step) */
 void fos_dev_stamp(struct fos_dev *d, int on);
+/* push/pull process compensation in stops (before the first step) */
+void fos_dev_push(struct fos_dev *d, float ev);
 /* forget the film table (leaving the darkroom) */
 void fos_dev_release();
 
