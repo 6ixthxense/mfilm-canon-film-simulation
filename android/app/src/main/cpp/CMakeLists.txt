@@ -14,7 +14,7 @@ add_library(mfilm SHARED
   ${FOS}/sim/port_files.c
   ${FOS}/sim/fonts.c
   ${FOS}/sim/films.c
-  ${FOS}/fos_gfx.c ${FOS}/fos_film.c
+  ${FOS}/fos_gfx.c ${FOS}/fos_film.c ${FOS}/fos_print.c
   ${FOS}/fos_dev.c ${FOS}/fos_dng.c ${FOS}/fos_lab.c
   ${FOS}/fos_looks.c ${FOS}/fos_jpeg.c)
 
