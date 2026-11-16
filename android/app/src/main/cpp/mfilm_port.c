@@ -386,8 +386,17 @@ static void shot_end(int dng)
     roll.shot++;
     char when[20], aperture[8], line[112];
     clock_str(when, sizeof(when), 1);
-    int fstop = next_fstop_x100 > 0 ? next_fstop_x100 : settings[FS_FSTOP];
-    fos_format_fstop(aperture, sizeof(aperture), fstop);
+    if (next_fstop_x100 > 0)
+    {
+        if (next_fstop_x100 % 100 == 0)
+            snprintf(aperture, sizeof(aperture), "%d", next_fstop_x100 / 100);
+        else
+            snprintf(aperture, sizeof(aperture), "%d.%d", next_fstop_x100 / 100, (next_fstop_x100 / 10) % 10);
+    }
+    else
+    {
+        fos_format_fstop(aperture, sizeof(aperture), settings[FS_FSTOP]);
+    }
     snprintf(line, sizeof(line), "%d  IMG_%04d.%s  %s:00  f/%s\n", roll.shot, file_no, dng ? "DNG" : "CR2", when, aperture);
     log_append(line);
 
@@ -590,6 +599,12 @@ int mf_lab_roll_prints(int roll_no, char *out, int out_size)
         pos += wrote;
     }
     return n;
+}
+
+int mf_lab_delete(int roll_no, int whole)
+{
+    struct fos_lab_frame frames[FOS_MAX_FRAMES];
+    return fos_lab_delete(roll_no, whole, frames);
 }
 
 /* ---------------------------------------------------------------- darkroom session */
@@ -854,13 +869,11 @@ static void shutter(void)
 
 void mf_run(void)
 {
-    int boot = 1;
     for (;;)
     {
         int now = now_ms();
         int o = -1, fire = 0, done = 0;
         pthread_mutex_lock(&in_lock);
-        if (boot) { open_req = FOS_OPEN_BOOT; boot = 0; }
         o = open_req; open_req = -1;
         fire = shutter_req; shutter_req = 0;
         done = shot_done_req; shot_done_req = 0;
@@ -870,11 +883,6 @@ void mf_run(void)
         {
             if (done > 0) shot_end(done == 2);
             shot_pending = 0;
-        }
-        if (end_due && now > end_due && FINISHED && !half_press && !shot_pending)
-        {
-            end_due = 0;
-            o = FOS_OPEN_END;
         }
         if (o >= 0 && !shot_pending)
         {

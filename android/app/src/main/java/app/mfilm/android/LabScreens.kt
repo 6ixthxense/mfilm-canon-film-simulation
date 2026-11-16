@@ -131,12 +131,14 @@ fun DarkroomScreen(
     var rolls by remember { mutableStateOf<List<LabRoll>>(emptyList()) }
     var selectedRoll by remember { mutableIntStateOf(-1) }
     var printSize by remember { mutableIntStateOf(0) }
+    var deleteAsk by remember { mutableStateOf(false) }
 
     LaunchedEffect(DevelopState.running) {
         rolls = parseLabRolls(Native.labRolls())
         if (selectedRoll < 0) {
             selectedRoll = rolls.firstOrNull { it.isWaiting }?.number ?: rolls.firstOrNull()?.number ?: -1
         }
+        deleteAsk = false
     }
 
     Column(
@@ -225,6 +227,7 @@ fun DarkroomScreen(
                                 .clickable {
                                     view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                                     selectedRoll = r.number
+                                    deleteAsk = false
                                 }
                                 .padding(horizontal = 14.dp, vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -243,37 +246,69 @@ fun DarkroomScreen(
                 val sel = rolls.find { it.number == selectedRoll }
                 if (sel != null) {
                     Spacer(Modifier.height(10.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (sel.isWaiting) {
-                            Row(
-                                Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                PRINT_SIZES.forEachIndexed { idx, (label, sz) ->
-                                    if (idx > 0) Label("·", size = 12.sp, color = SAFELIGHT_DIM)
-                                    Key(label, color = if (printSize == sz) SAFELIGHT else SAFELIGHT_DIM) { printSize = sz }
+                    if (deleteAsk && !sel.inCamera) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, SAFELIGHT, RoundedCornerShape(3.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (sel.isDeveloped || sel.jpegs > 0) {
+                                Key("Del prints", color = SAFELIGHT) {
+                                    Native.labDelete(sel.number, false)
+                                    deleteAsk = false
+                                    rolls = parseLabRolls(Native.labRolls())
                                 }
                             }
-                            Box(
-                                Modifier
-                                    .defaultMinSize(108.dp, 48.dp)
-                                    .border(1.dp, SAFELIGHT, RoundedCornerShape(3.dp))
-                                    .clickable {
-                                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                                        onDevelop(sel.number, printSize)
-                                    }
-                                    .padding(horizontal = 16.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Label("Develop", size = 13.sp, color = SAFELIGHT)
+                            Key("Del all", color = Look.Amber) {
+                                Native.labDelete(sel.number, true)
+                                deleteAsk = false
+                                rolls = parseLabRolls(Native.labRolls())
+                                selectedRoll = rolls.firstOrNull()?.number ?: -1
                             }
-                        } else if (sel.jpegs > 0 || sel.isDeveloped) {
-                            Spacer(Modifier.width(1.dp))
-                            Key("View prints →", color = SAFELIGHT) { onOpenPrints(sel.number) }
+                            Key("Cancel", color = SAFELIGHT_DIM) { deleteAsk = false }
+                        }
+                    } else {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (sel.isWaiting) {
+                                Row(
+                                    Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    PRINT_SIZES.forEachIndexed { idx, (label, sz) ->
+                                        if (idx > 0) Label("·", size = 12.sp, color = SAFELIGHT_DIM)
+                                        Key(label, color = if (printSize == sz) SAFELIGHT else SAFELIGHT_DIM) { printSize = sz }
+                                    }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    if (!sel.inCamera) Key("Delete", color = SAFELIGHT_DIM) { deleteAsk = true }
+                                    Box(
+                                        Modifier
+                                            .defaultMinSize(108.dp, 48.dp)
+                                            .border(1.dp, SAFELIGHT, RoundedCornerShape(3.dp))
+                                            .clickable {
+                                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                                onDevelop(sel.number, printSize)
+                                            }
+                                            .padding(horizontal = 16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Label("Develop", size = 13.sp, color = SAFELIGHT)
+                                    }
+                                }
+                            } else {
+                                if (!sel.inCamera) Key("Delete", color = SAFELIGHT_DIM) { deleteAsk = true }
+                                else Spacer(Modifier.width(1.dp))
+                                if (sel.jpegs > 0 || sel.isDeveloped) {
+                                    Key("View prints →", color = SAFELIGHT) { onOpenPrints(sel.number) }
+                                }
+                            }
                         }
                     }
                 }
@@ -473,7 +508,9 @@ fun SettingsScreen(
     ui: Ui,
     onToggleWind: () -> Unit,
     onToggleFinder: () -> Unit,
+    onToggleFramelines: () -> Unit,
     onToggleBwPreview: () -> Unit,
+    onToggleDateStamp: () -> Unit,
     onToggleHand: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -490,7 +527,9 @@ fun SettingsScreen(
 
         SettingRow("FILM ADVANCE", if (ui.realisticWind) "REALISTIC (WIND ON)" else "AUTO", onToggleWind)
         SettingRow("VIEWFINDER", if (ui.cleanFinder) "CLEAN" else "INFO", onToggleFinder)
+        SettingRow("FRAMELINES", if (ui.framelines) "ON" else "OFF", onToggleFramelines)
         SettingRow("B&W FILM PREVIEW", if (ui.bwPreview) "MONOCHROME" else "COLOUR", onToggleBwPreview)
+        SettingRow("DATE STAMP", if (ui.dateStamp) "ON" else "OFF", onToggleDateStamp)
         SettingRow("LANDSCAPE GRIP", if (ui.leftHanded) "LEFT-HANDED" else "RIGHT-HANDED", onToggleHand)
 
         Spacer(Modifier.height(24.dp))

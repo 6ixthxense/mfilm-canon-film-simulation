@@ -73,11 +73,13 @@ object Native {
     @JvmStatic external fun rollFrames(): String
 
     const val SET_WIND = 3
+    const val SET_STAMP = 23
     @JvmStatic external fun getSetting(id: Int): Int
     @JvmStatic external fun setSetting(id: Int, value: Int)
     @JvmStatic external fun setShotFstop(fstopX100: Int)
     @JvmStatic external fun labRolls(): String
     @JvmStatic external fun labRollPrints(rollNo: Int): String
+    @JvmStatic external fun labDelete(rollNo: Int, whole: Boolean): Int
     @JvmStatic external fun devOpen(rollNo: Int, size: Int): Int
     /** out (3): currentFrameNo, doneFrames, progress0to1000; returns 1 developing, 0 done, -1 error */
     @JvmStatic external fun devStep(budgetMs: Int, out: IntArray): Int

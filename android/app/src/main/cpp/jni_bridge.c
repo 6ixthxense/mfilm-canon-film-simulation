@@ -182,6 +182,11 @@ JNIEXPORT jstring JNICALL FN(labRollPrints)(JNIEnv *env, jclass cls, jint rollNo
     return res;
 }
 
+JNIEXPORT jint JNICALL FN(labDelete)(JNIEnv *env, jclass cls, jint rollNo, jboolean whole)
+{
+    return mf_lab_delete(rollNo, whole ? 1 : 0);
+}
+
 JNIEXPORT jint JNICALL FN(devOpen)(JNIEnv *env, jclass cls, jint rollNo, jint size)
 {
     return mf_dev_open(rollNo, size);

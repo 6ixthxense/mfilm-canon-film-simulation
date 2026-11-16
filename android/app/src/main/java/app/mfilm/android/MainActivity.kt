@@ -51,7 +51,6 @@ import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private lateinit var card: Card
-    private lateinit var screen: ScreenView
     private lateinit var preview: PreviewView
     private val ui = Ui()
     private var imageCapture: ImageCapture? = null
@@ -82,7 +81,6 @@ class MainActivity : ComponentActivity() {
     private val ev = IntArray(3)
     private val roll = IntArray(5)
     private var running = false
-    private var uiUp = true
     private var volumeDown = false
     private val bwFilms by lazy {
         val n = Native.filmCount()
@@ -102,7 +100,6 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         immersive()
 
-        screen = ScreenView(this)
         preview = PreviewView(this).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -123,16 +120,14 @@ class MainActivity : ComponentActivity() {
             }
             card.resumePending()
         }
-        Native.frame(screen.bitmap, true)
 
-        // turned round, the activity starts again: the film OS carries on where it was
-        uiUp = Native.uiRunning()
-        ui.filmOs = uiUp
         val prefs = getPreferences(MODE_PRIVATE)
         ui.leftHanded = prefs.getBoolean("left_handed", false)
         ui.cleanFinder = prefs.getBoolean("clean_finder", false)
+        ui.framelines = prefs.getBoolean("framelines", true)
         ui.bwPreview = prefs.getBoolean("bw_preview", true)
         ui.realisticWind = Native.getSetting(Native.SET_WIND) != 0
+        ui.dateStamp = Native.getSetting(Native.SET_STAMP) != 0
         updateLabel()
         val tap = { k: Int -> Native.key(k); Native.key(k or Native.RELEASE) }
         val actions = Actions(
@@ -148,11 +143,10 @@ class MainActivity : ComponentActivity() {
             darkroom = { ui.route = Route.DARKROOM },
             settings = { ui.route = Route.SETTINGS },
             wind = { playWindSound(); tap(Native.K_SET) },
-            key = tap,
         )
         setContent {
             when (ui.route) {
-                Route.CAMERA -> CameraScreen(ui, preview, screen, actions)
+                Route.CAMERA -> CameraScreen(ui, preview, actions)
                 Route.SHELF -> ShelfScreen(
                     ui,
                     onLoad = { film, exp ->
@@ -194,9 +188,17 @@ class MainActivity : ComponentActivity() {
                         ui.cleanFinder = !ui.cleanFinder
                         prefs.edit().putBoolean("clean_finder", ui.cleanFinder).apply()
                     },
+                    onToggleFramelines = {
+                        ui.framelines = !ui.framelines
+                        prefs.edit().putBoolean("framelines", ui.framelines).apply()
+                    },
                     onToggleBwPreview = {
                         ui.bwPreview = !ui.bwPreview
                         prefs.edit().putBoolean("bw_preview", ui.bwPreview).apply()
+                    },
+                    onToggleDateStamp = {
+                        ui.dateStamp = !ui.dateStamp
+                        Native.setSetting(Native.SET_STAMP, if (ui.dateStamp) 1 else 0)
                     },
                     onToggleHand = {
                         ui.leftHanded = !ui.leftHanded
@@ -206,15 +208,13 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        // a debug build, started with `am start ... --ez camera true`: straight to the camera (a half-press),
-        // for a screenshot of it where nothing can touch the screen
-        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0 && intent.getBooleanExtra("camera", false)) {
-            screen.postDelayed({ Native.half(true); Native.half(false) }, 2500)
-        }
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             when (intent.getStringExtra("route")) {
                 "shelf" -> ui.route = Route.SHELF
                 "roll" -> ui.route = Route.ROLL
+                "darkroom" -> ui.route = Route.DARKROOM
+                "prints" -> ui.route = Route.PRINTS
+                "settings" -> ui.route = Route.SETTINGS
             }
         }
 
@@ -246,16 +246,8 @@ class MainActivity : ComponentActivity() {
 
     private fun release(fire: Boolean) {
         Native.half(false)
-        if (fire && !uiUp) Native.shutter()
+        if (fire && ui.route == Route.CAMERA) Native.shutter()
     }
-
-    private val hwKeys = mapOf(
-        KeyEvent.KEYCODE_DPAD_LEFT to Native.K_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT to Native.K_RIGHT,
-        KeyEvent.KEYCODE_DPAD_UP to Native.K_UP, KeyEvent.KEYCODE_DPAD_DOWN to Native.K_DOWN,
-        KeyEvent.KEYCODE_DPAD_CENTER to Native.K_SET, KeyEvent.KEYCODE_ENTER to Native.K_SET,
-        KeyEvent.KEYCODE_M to Native.K_MENU, KeyEvent.KEYCODE_I to Native.K_INFO, KeyEvent.KEYCODE_P to Native.K_PLAY,
-        KeyEvent.KEYCODE_LEFT_BRACKET to Native.K_WHEEL_L, KeyEvent.KEYCODE_RIGHT_BRACKET to Native.K_WHEEL_R,
-    )
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         // the volume keys are the shutter
@@ -267,11 +259,6 @@ class MainActivity : ComponentActivity() {
             if (event.repeatCount == 0) ui.route = Route.CAMERA
             return true
         }
-        if (keyCode == KeyEvent.KEYCODE_BACK && Native.uiRunning()) {
-            if (event.repeatCount == 0) Native.key(Native.K_MENU)
-            return true
-        }
-        hwKeys[keyCode]?.let { if (event.repeatCount == 0) Native.key(it); return true }
         return super.onKeyDown(keyCode, event)
     }
 
@@ -281,14 +268,8 @@ class MainActivity : ComponentActivity() {
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_BACK && ui.route != Route.CAMERA) {
-            if (event.repeatCount == 0) ui.route = Route.CAMERA
             return true
         }
-        if (keyCode == KeyEvent.KEYCODE_BACK && Native.uiRunning()) {
-            Native.key(Native.K_MENU or Native.RELEASE)
-            return true
-        }
-        hwKeys[keyCode]?.let { Native.key(it or Native.RELEASE); return true }
         return super.onKeyUp(keyCode, event)
     }
 
@@ -387,7 +368,7 @@ class MainActivity : ComponentActivity() {
         }
         ic.targetRotation = held
         playShutterSound()
-        screen.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        preview.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         if (rawCapture) {
             // straight to the card; the roll counts it once it is all there
             val part = card.rawPart(number)
@@ -451,7 +432,6 @@ class MainActivity : ComponentActivity() {
         override fun doFrame(frameTimeNanos: Long) {
             if (!running) return
             while (Native.pollEvent(ev)) event(ev[0], ev[1], ev[2])
-            if (Native.frame(screen.bitmap, false)) screen.invalidate()
             Choreographer.getInstance().postFrameCallback(this)
         }
     }
@@ -459,18 +439,17 @@ class MainActivity : ComponentActivity() {
     private fun event(what: Int, a: Int, b: Int) {
         when (what) {
             Native.EV_CAPTURE -> capture(a)
-            Native.EV_MODE -> { uiUp = a != 0; ui.filmOs = uiUp; updateLabel() }
-            Native.EV_SHOT, Native.EV_LOADED, Native.EV_REWOUND, Native.EV_FINISHED, Native.EV_WIND -> updateLabel()
+            Native.EV_SHOT, Native.EV_LOADED, Native.EV_REWOUND, Native.EV_WIND -> updateLabel()
+            Native.EV_FINISHED -> {
+                updateLabel()
+                ui.route = Route.ROLL
+            }
             Native.EV_DEVELOPING -> if (a == 0) {
                 updateLabel()
                 card.exportPrints { n ->
                     if (n > 0) runOnUiThread { Toast.makeText(this, "$n prints in Pictures/M-Film", Toast.LENGTH_LONG).show() }
                 }
             }
-            Native.EV_DIM -> window.attributes = window.attributes.apply {
-                screenBrightness = if (a != 0) 0.02f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-            }
-            Native.EV_CANON_MENU -> about()
         }
     }
 
@@ -538,24 +517,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun about() {
-        val handLabel = if (ui.leftHanded) "Right-handed layout" else "Left-handed layout"
-        AlertDialog.Builder(this)
-            .setTitle("M-Film for Android")
-            .setMessage(
-                "The film OS of M-Film (github.com/HNGSeries/mfilm-canon-film-simulation, GPL-2.0), " +
-                    "running on the phone.\n\nThe card: ${card.root.path}\nPrints are copied to Pictures/M-Film.\n\n" +
-                    "Colour tables of 59 films: Pat David, CC BY-SA 4.0 (see ML/THIRD_PARTY.txt on the card). " +
-                    "Not affiliated with Canon, Kodak, Fujifilm or others."
-            )
-            .setNeutralButton(handLabel) { _, _ ->
-                ui.leftHanded = !ui.leftHanded
-                getPreferences(MODE_PRIVATE).edit().putBoolean("left_handed", ui.leftHanded).apply()
-            }
-            .setPositiveButton("OK", null)
-            .show()
-    }
-
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             val level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
@@ -569,8 +530,6 @@ class MainActivity : ComponentActivity() {
         if (!Native.started()) return
         running = true
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        Native.frame(screen.bitmap, true)
-        screen.invalidate()
         updateLabel()
         Choreographer.getInstance().postFrameCallback(tick)
         @Suppress("DEPRECATION")

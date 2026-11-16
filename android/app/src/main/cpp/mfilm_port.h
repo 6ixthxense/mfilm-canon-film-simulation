@@ -58,6 +58,7 @@ void mf_set_setting(int id, int val);
 void mf_set_shot_fstop(int fstop_x100);
 int  mf_lab_rolls(char *out, int out_size);
 int  mf_lab_roll_prints(int roll_no, char *out, int out_size);
+int  mf_lab_delete(int roll_no, int whole);
 int  mf_dev_open(int roll_no, int size);
 int  mf_dev_step(int budget_ms, int out[3]);
 int  mf_dev_preview_bmp(uint32_t *argb, int w, int h);
