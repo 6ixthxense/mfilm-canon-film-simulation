@@ -79,7 +79,7 @@ JNIEXPORT jint JNICALL FN(filmCount)(JNIEnv *env, jclass cls)
 JNIEXPORT jstring JNICALL FN(filmInfo)(JNIEnv *env, jclass cls, jint idx, jintArray out)
 {
     int r[6];
-    char name[64];
+    char name[192];
     mf_film_info(idx, r, name, sizeof(name));
     (*env)->SetIntArrayRegion(env, out, 0, 6, r);
     return (*env)->NewStringUTF(env, name);

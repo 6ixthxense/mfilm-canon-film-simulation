@@ -1,12 +1,14 @@
 package app.mfilm.android
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,6 +47,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -59,6 +64,8 @@ private val EXPOSURES = listOf(12, 24, 36)
 data class FilmEntry(
     val index: Int,
     val name: String,
+    val key: String,
+    val note: String,
     val iso: Int,
     val group: Int,
     val grain: Int,
@@ -73,8 +80,34 @@ fun loadFilmCatalog(): List<FilmEntry> {
     val n = Native.filmCount()
     val info = IntArray(6)
     return (0 until n).map { i ->
-        val name = Native.filmInfo(i, info)
-        FilmEntry(i, name, info[0], info[1], info[2], info[3], info[4], info[5])
+        val parts = Native.filmInfo(i, info).split('|')
+        val name = parts.getOrElse(0) { "" }
+        val key = parts.getOrElse(1) { "" }
+        val note = parts.getOrElse(2) { "" }
+        FilmEntry(i, name, key, note, info[0], info[1], info[2], info[3], info[4], info[5])
+    }
+}
+
+@Composable
+private fun SamplePhoto(filmKey: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val bmp = remember(filmKey) {
+        if (filmKey.isBlank()) null
+        else runCatching {
+            context.assets.open("samples/$filmKey.jpg").use { BitmapFactory.decodeStream(it) }
+        }.getOrNull()
+    }
+    if (bmp != null) {
+        Image(
+            bmp.asImageBitmap(),
+            contentDescription = "Sample for $filmKey",
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        Box(modifier.background(Look.Window), contentAlignment = Alignment.Center) {
+            Label("NO SAMPLE", size = 10.sp, color = Look.Dim)
+        }
     }
 }
 
@@ -132,6 +165,7 @@ fun ShelfScreen(
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { shelfFilms.size })
     var leaderOut by remember(group, pagerState.currentPage) { mutableStateOf(false) }
     var exp by remember { mutableIntStateOf(36) }
+    var fullSample by remember { mutableStateOf(false) }
 
     LaunchedEffect(group) {
         if (shelfFilms.isNotEmpty()) pagerState.scrollToPage(0)
@@ -141,6 +175,49 @@ fun ShelfScreen(
     }
 
     val selected = shelfFilms.getOrNull(pagerState.currentPage)
+
+    if (fullSample && selected != null) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .windowInsetsPadding(WindowInsets.displayCutout)
+                .padding(16.dp)
+                .pointerInput(shelfFilms.size, pagerState.currentPage) {
+                    var dx = 0f
+                    detectHorizontalDragGestures(onDragStart = { dx = 0f }) { change, drag ->
+                        change.consume()
+                        dx += drag
+                        if (abs(dx) > 64.dp.toPx()) {
+                            val next = (pagerState.currentPage + if (dx > 0) -1 else 1).coerceIn(0, shelfFilms.lastIndex)
+                            dx = 0f
+                            if (next != pagerState.currentPage) {
+                                scope.launch { pagerState.animateScrollToPage(next) }
+                            }
+                        }
+                    }
+                },
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Key("← Shelf") { fullSample = false }
+                Label("SAMPLE · ${selected.name}", size = 14.sp, color = Look.Amber)
+                Spacer(Modifier.width(56.dp))
+            }
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                SamplePhoto(
+                    selected.key,
+                    Modifier.fillMaxWidth().aspectRatio(3f / 2).border(1.dp, Look.Brass),
+                )
+            }
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Label("ISO ${selected.iso}  ·  ${selected.note}", size = 11.sp, color = Look.Ivory)
+                Spacer(Modifier.height(8.dp))
+                Label("Swipe left/right to compare films", size = 10.sp, color = Look.Dim)
+            }
+        }
+        return
+    }
 
     Column(
         Modifier.fillMaxSize().background(Look.Body).windowInsetsPadding(WindowInsets.displayCutout).padding(16.dp),
@@ -239,16 +316,39 @@ fun ShelfScreen(
                     Box(Modifier.fillMaxWidth().height(14.dp).background(SHELF_WOOD).border(1.dp, SHELF_EDGE))
                     Spacer(Modifier.height(14.dp))
 
-                    // film title + specs
+                    // film title + note + live tone sample + specs
                     Label(selected.name, size = 18.sp, color = Look.Ivory)
-                    Spacer(Modifier.height(4.dp))
-                    Label("ISO ${selected.iso}  ·  ${pagerState.currentPage + 1} OF ${shelfFilms.size}", size = 12.sp, color = Look.Dim)
+                    Spacer(Modifier.height(2.dp))
+                    Label("ISO ${selected.iso}  ·  ${pagerState.currentPage + 1} OF ${shelfFilms.size}", size = 11.sp, color = Look.Dim)
+                    if (selected.note.isNotBlank()) {
+                        Spacer(Modifier.height(2.dp))
+                        Label(selected.note, size = 11.sp, color = Look.Dim)
+                    }
                     Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        SpecBar("GRN", selected.grain)
-                        SpecBar("PCH", selected.punch)
-                        SpecBar("CLR", selected.colour)
-                        SpecBar("WRM", selected.warmth)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .width(156.dp)
+                                .aspectRatio(3f / 2)
+                                .border(1.dp, Look.Brass, RoundedCornerShape(2.dp))
+                                .clickable {
+                                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                    fullSample = true
+                                }
+                        ) {
+                            SamplePhoto(selected.key, Modifier.fillMaxSize())
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            SpecBar("GRN", selected.grain)
+                            SpecBar("PCH", selected.punch)
+                            SpecBar("CLR", selected.colour)
+                            SpecBar("WRM", selected.warmth)
+                            Label("TAP PHOTO TO ZOOM", size = 9.sp, color = Look.Dim)
+                        }
                     }
                 }
             }

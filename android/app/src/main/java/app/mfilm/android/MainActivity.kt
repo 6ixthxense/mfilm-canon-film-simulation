@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
         val n = Native.filmCount()
         val info = IntArray(6)
         (0 until n).mapNotNull { i ->
-            val name = Native.filmInfo(i, info)
+            val name = Native.filmInfo(i, info).substringBefore('|')
             if (info[1] == 2) name else null
         }.toSet()
     }
@@ -679,7 +679,9 @@ class MainActivity : ComponentActivity() {
                 if (ui.singleShot) {
                     // auto-roll over cleanly when 64-frame single-shot buffer fills
                     val currentName = ui.film
-                    val idx = (0 until Native.filmCount()).firstOrNull { Native.filmInfo(it, IntArray(6)) == currentName } ?: 0
+                    val idx = (0 until Native.filmCount()).firstOrNull {
+                        Native.filmInfo(it, IntArray(6)).substringBefore('|') == currentName
+                    } ?: 0
                     Native.switchFilm(idx, true)
                     updateLabel()
                 } else {
