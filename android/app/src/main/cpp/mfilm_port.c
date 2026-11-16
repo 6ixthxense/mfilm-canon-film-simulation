@@ -375,7 +375,7 @@ void mf_film_info(int idx, int out[6], char *name, int name_size)
     out[4] = f->colour;
     out[5] = f->warmth;
     if (name && name_size > 0)
-        snprintf(name, (size_t) name_size, "%s|%s|%s", f->name ? f->name : "", f->key ? f->key : "", f->note ? f->note : "");
+        snprintf(name, (size_t) name_size, "%s|%s|%s", f->name ? f->name : "", f->key ? f->key : "", f->desc ? f->desc : "");
 }
 
 void mf_draw_canister(int film, int exposures, int leader, uint32_t *argb, int w, int h)
