@@ -15,6 +15,15 @@ rm -rf "$OUT"
 mkdir -p "$OUT/tables"
 cp "$SIM/out/FOSFONT.BIN" "$SIM/out/FOSFILMS.BIN" "$OUT/"
 (cd "$SIM" && python3 ../tools/gentables.py "$OUT/tables" --films out/FOSFILMS.BIN --devtest out/devtest ${MFILM_PLAIN:+--plain})
+mkdir -p "$OUT/samples"
+python3 -c '
+import glob, os
+from PIL import Image
+os.makedirs(sys_out := "'"$OUT"'/samples", exist_ok=True)
+for p in glob.glob("'"$ROOT"'/docs/films/*.jpg"):
+    im = Image.open(p).convert("RGB").resize((480, 320), Image.Resampling.LANCZOS)
+    im.save(os.path.join(sys_out, os.path.basename(p)), "JPEG", quality=82)
+'
 cp "$ROOT/LICENSE" "$OUT/LICENSE.txt"
 cp "$ROOT/THIRD_PARTY.md" "$OUT/THIRD_PARTY.txt"
 ls -la "$OUT" "$OUT/tables" | tail -5
