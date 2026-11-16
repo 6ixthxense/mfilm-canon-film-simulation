@@ -112,28 +112,30 @@ class Card(private val context: Context) {
 
     /** every print the darkroom made, into Pictures/M-Film/<roll folder>, once each */
     fun exportPrints(done: (Int) -> Unit = {}) {
-        exporter.execute {
-            var n = 0
-            try {
-                val seen = if (exportedList.exists()) exportedList.readLines().toMutableSet() else mutableSetOf()
-                val folders = File(root, "DCIM").listFiles { f -> f.isDirectory && f.name != "100CANON" } ?: emptyArray()
-                for (folder in folders.sortedBy { it.name }) {
-                    val prints = folder.listFiles { f -> f.name.uppercase().endsWith(".JPG") } ?: continue
-                    for (p in prints.sortedBy { it.name }) {
-                        val key = "${folder.name}/${p.name}:${p.length()}"
-                        if (key in seen) continue
-                        if (toGallery(folder.name, p)) {
-                            seen += key
-                            exportedList.appendText(key + "\n")
-                            n++
-                        }
+        exporter.execute { done(exportPrintsSync()) }
+    }
+
+    fun exportPrintsSync(): Int = synchronized(exportLock) {
+        var n = 0
+        try {
+            val seen = if (exportedList.exists()) exportedList.readLines().toMutableSet() else mutableSetOf()
+            val folders = File(root, "DCIM").listFiles { f -> f.isDirectory && f.name != "100CANON" } ?: emptyArray()
+            for (folder in folders.sortedBy { it.name }) {
+                val prints = folder.listFiles { f -> f.name.uppercase().endsWith(".JPG") } ?: continue
+                for (p in prints.sortedBy { it.name }) {
+                    val key = "${folder.name}/${p.name}:${p.length()}"
+                    if (key in seen) continue
+                    if (toGallery(folder.name, p)) {
+                        seen += key
+                        exportedList.appendText(key + "\n")
+                        n++
                     }
                 }
-            } catch (t: Throwable) {
-                Log.e(TAG, "export", t)
             }
-            done(n)
+        } catch (t: Throwable) {
+            Log.e(TAG, "export", t)
         }
+        n
     }
 
     private fun toGallery(folder: String, file: File): Boolean {
@@ -161,5 +163,6 @@ class Card(private val context: Context) {
 
     companion object {
         const val TAG = "mfilm"
+        private val exportLock = Any()
     }
 }

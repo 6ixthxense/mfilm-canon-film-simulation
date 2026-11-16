@@ -212,6 +212,8 @@ fun DarkroomScreen(
         } else {
             if (DevelopState.error != null) {
                 Label(DevelopState.error!!, size = 12.sp, color = Look.Amber, modifier = Modifier.padding(bottom = 8.dp))
+            } else if (DevelopState.status != null) {
+                Label(DevelopState.status!!, size = 12.sp, color = SAFELIGHT, modifier = Modifier.padding(bottom = 8.dp))
             }
             if (rolls.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {

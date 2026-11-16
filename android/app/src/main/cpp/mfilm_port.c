@@ -83,6 +83,7 @@ static int file_no = 100;                   /* the card's last IMG_nnnn */
 static int need_wind;
 
 static char card[512];                      /* ends in '/' */
+static char abs_card[600];                  /* full path ending in '/' for Java/Kotlin File */
 static char dcim[600];                      /* card DCIM/100CANON */
 static char state_path[600];
 
@@ -515,7 +516,8 @@ int mf_lab_roll_prints(int roll_no, char *out, int out_size)
             const char *base = strrchr(f->cr2, '/');
             char name[9];
             fos_copy(name, sizeof(name), base ? base + 1 : f->cr2, 8);
-            snprintf(jpeg, sizeof(jpeg), "%s%s/%s.JPG", card, dcim_dir, name);
+            const char *sub = (dcim_dir[0] == '.' && dcim_dir[1] == '/') ? dcim_dir + 2 : dcim_dir;
+            snprintf(jpeg, sizeof(jpeg), "%s%s/%s.JPG", abs_card, sub, name);
             struct stat st;
             if (stat(jpeg, &st) != 0) jpeg[0] = 0;
         }
@@ -545,7 +547,11 @@ static int dk_film = 0;
 static int dk_size = 0;
 static int dk_push = 0;
 static int dk_target = 0;
+static int dk_failed = 0;
 static char dk_dcim[160] = "";
+static char dk_err[128] = "";
+
+const char *mf_dev_error(void) { return dk_err; }
 
 void mf_dev_close(void)
 {
@@ -560,6 +566,12 @@ void mf_dev_close(void)
 int mf_dev_open(int roll_no, int size, int push_stops, int target_frame)
 {
     mf_dev_close();
+    dk_failed = 0;
+    dk_err[0] = 0;
+    char cache[64];
+    fos_lab_cache_dir(cache, sizeof(cache));
+    fos_dev_cache(cache);
+
     struct fos_lab_roll rolls[32];
     int nrolls = fos_lab_scan(rolls, 32);
     int film = -1;
@@ -641,9 +653,10 @@ int mf_dev_step(int budget_ms, int out[3])
             fos_lab_print_path(sheet_path, sizeof(sheet_path), dk_roll, 0);
             fos_dev_sheet(sheet_path, dk_film, pp, dk_nframes);
             out[1] = dk_done;
+            int all_failed = dk_failed > 0 && dk_failed >= dk_done;
             mf_dev_close();
             post_event(MF_EV_DEVELOPING, 0, 0);
-            return 0;
+            return all_failed ? -1 : 0;
         }
     }
 
@@ -654,6 +667,13 @@ int mf_dev_step(int budget_ms, int out[3])
     out[2] = fos_clamp(prog, 0, 1000);
     if (doing == FOS_DEV_DONE || doing == FOS_DEV_FAILED)
     {
+        if (doing == FOS_DEV_FAILED)
+        {
+            const char *why = fos_dev_error(dk_dev);
+            snprintf(dk_err, sizeof(dk_err), "%s", (why && why[0]) ? why : "Development failed");
+            logf_("darkroom frame %d failed: %s", out[0], dk_err);
+            dk_failed++;
+        }
         fos_dev_free(dk_dev);
         dk_dev = 0;
         dk_done++;
@@ -746,6 +766,7 @@ int mf_init(const char *files_dir, const char *card_dir)
     if (!file_ok(font)) { logf_("no fonts at %s", font); return -1; }
     mkdirs(card_dir);
     if (chdir(card_dir)) { logf_("can't go into the card %s: %s", card_dir, strerror(errno)); return -1; }
+    snprintf(abs_card, sizeof(abs_card), "%s", card_dir);
     snprintf(card, sizeof(card), "./");
     snprintf(dcim, sizeof(dcim), "%sDCIM/100CANON", card);
     snprintf(state_path, sizeof(state_path), "%sML/MFSTATE.BIN", card);
@@ -762,6 +783,9 @@ int mf_init(const char *files_dir, const char *card_dir)
     fos_gfx_init();
     sim_fonts();
     sim_films();
+    char cache[64];
+    fos_lab_cache_dir(cache, sizeof(cache));
+    fos_dev_cache(cache);
     if (roll.film >= fos_nfilms) roll.loaded = 0;
     logf_("card %s, roll %d (%s), last frame IMG_%04d", card, roll.number, roll.loaded ? "loaded" : "none", file_no);
     return 0;

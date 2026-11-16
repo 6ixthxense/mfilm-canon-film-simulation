@@ -25,6 +25,7 @@ object DevelopState {
     var progress by mutableIntStateOf(0)       // 0..1000
     var preview by mutableStateOf<Bitmap?>(null)
     var error by mutableStateOf<String?>(null)
+    var status by mutableStateOf<String?>(null)
 }
 
 class DevelopService : Service() {
@@ -72,6 +73,7 @@ class DevelopService : Service() {
         DevelopState.totalFrames = 0
         DevelopState.progress = 0
         DevelopState.error = null
+        DevelopState.status = null
 
         worker.execute {
             try {
@@ -96,13 +98,21 @@ class DevelopService : Service() {
                             }
                         }
                         if (r <= 0) {
-                            if (r < 0) DevelopState.error = "Development failed"
+                            if (r < 0) {
+                                val err = Native.devError()
+                                DevelopState.error = err.ifBlank { "Development failed" }
+                            }
                             break
                         }
                     }
                     bmp.recycle()
                     if (!cancelled) {
-                        Card(this).exportPrints()
+                        val saved = Card(this).exportPrintsSync()
+                        if (saved > 0) {
+                            DevelopState.status = "Saved $saved photo${if (saved == 1) "" else "s"} to Pictures/M-Film"
+                        } else if (DevelopState.error == null && out[1] == 0) {
+                            DevelopState.error = "No prints generated"
+                        }
                     }
                 }
             } catch (t: Throwable) {

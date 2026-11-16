@@ -54,6 +54,7 @@ object Native {
     /** out (3): currentFrameNo, doneFrames, progress0to1000; returns 1 developing, 0 done, -1 error */
     @JvmStatic external fun devStep(budgetMs: Int, out: IntArray): Int
     @JvmStatic external fun devPreview(bitmap: Bitmap): Boolean
+    @JvmStatic external fun devError(): String
     @JvmStatic external fun devClose()
     @JvmStatic external fun makeCr2(path: String, argb: IntArray, w: Int, h: Int, seed: Int): Int
 }
