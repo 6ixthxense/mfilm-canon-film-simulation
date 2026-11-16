@@ -41,6 +41,8 @@ class DevelopService : Service() {
         }
         val rollNo = intent?.getIntExtra(EXTRA_ROLL, -1) ?: -1
         val size = intent?.getIntExtra(EXTRA_SIZE, 0) ?: 0
+        val push = intent?.getIntExtra(EXTRA_PUSH, 0) ?: 0
+        val targetFrame = intent?.getIntExtra(EXTRA_FRAME, 0) ?: 0
         if (rollNo <= 0 || DevelopState.running) return START_NOT_STICKY
 
         val chId = "mfilm_darkroom"
@@ -50,7 +52,10 @@ class DevelopService : Service() {
         )
         val notif = Notification.Builder(this, chId)
             .setContentTitle("M-Film Darkroom")
-            .setContentText("Developing roll %03d…".format(rollNo))
+            .setContentText(
+                if (targetFrame > 0) "Developing frame #%02d…".format(targetFrame)
+                else "Developing roll %03d…".format(rollNo)
+            )
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .build()
@@ -70,7 +75,7 @@ class DevelopService : Service() {
 
         worker.execute {
             try {
-                val total = Native.devOpen(rollNo, size)
+                val total = Native.devOpen(rollNo, size, push, targetFrame)
                 if (total <= 0) {
                     DevelopState.error = if (total < 0) "Cannot open roll" else "Nothing to develop"
                 } else {
@@ -124,11 +129,15 @@ class DevelopService : Service() {
         const val ACTION_STOP = "app.mfilm.android.STOP_DEV"
         const val EXTRA_ROLL = "roll"
         const val EXTRA_SIZE = "size"
+        const val EXTRA_PUSH = "push"
+        const val EXTRA_FRAME = "frame"
 
-        fun start(context: Context, rollNo: Int, size: Int) {
+        fun start(context: Context, rollNo: Int, size: Int, pushStops: Int = 0, targetFrame: Int = 0) {
             val i = Intent(context, DevelopService::class.java)
                 .putExtra(EXTRA_ROLL, rollNo)
                 .putExtra(EXTRA_SIZE, size)
+                .putExtra(EXTRA_PUSH, pushStops)
+                .putExtra(EXTRA_FRAME, targetFrame)
             context.startForegroundService(i)
         }
 

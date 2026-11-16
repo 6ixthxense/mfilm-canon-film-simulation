@@ -20,7 +20,7 @@
 #include <dirent.h>
 
 #include "fos.h"
-#include "fos_ui.h"
+#include "fos_gfx.h"
 #include "fos_dev.h"
 #include "mfilm_port.h"
 
@@ -41,11 +41,6 @@ static void logf_(const char *fmt, ...)
 }
 
 /* ---------------------------------------------------------------- what the app sees */
-
-static pthread_mutex_t scr_lock = PTHREAD_MUTEX_INITIALIZER;
-static uint8_t screen[FOS_W * FOS_H];
-static uint32_t pal[256];                   /* 0xRRGGBB */
-static int scr_dirty = 1;
 
 /* events for the app */
 #define NEV 128
@@ -71,33 +66,6 @@ int mf_poll_event(int *what, int *a, int *b)
     }
     pthread_mutex_unlock(&ev_lock);
     return have;
-}
-
-int mf_frame(uint32_t *out, int force)
-{
-    static uint32_t lut[256];
-    pthread_mutex_lock(&scr_lock);
-    if (!scr_dirty && !force) { pthread_mutex_unlock(&scr_lock); return 0; }
-    scr_dirty = 0;
-    for (int i = 0; i < 256; i++) lut[i] = i == 0 ? 0 : 0xFF000000u | (pal[i] & 0xFFFFFF);
-    for (int i = 0; i < FOS_W * FOS_H; i++) out[i] = lut[screen[i]];
-    pthread_mutex_unlock(&scr_lock);
-    return 1;
-}
-
-static void present_rows(const uint8_t *rows, int pitch, int y0, int y1)
-{
-    pthread_mutex_lock(&scr_lock);
-    for (int y = y0; y < y1; y++) memcpy(&screen[y * FOS_W], &rows[(y - y0) * pitch], FOS_W);
-    scr_dirty = 1;
-    pthread_mutex_unlock(&scr_lock);
-}
-
-static void palette_changed(void)
-{
-    pthread_mutex_lock(&scr_lock);
-    scr_dirty = 1;
-    pthread_mutex_unlock(&scr_lock);
 }
 
 /* ---------------------------------------------------------------- the camera's state */
@@ -179,47 +147,22 @@ static void scan_card(void)
 /* ---------------------------------------------------------------- keys, commands */
 
 static pthread_mutex_t in_lock = PTHREAD_MUTEX_INITIALIZER;
-static int keyq[64], kq_head, kq_tail;
-static volatile int ui_running, abort_req, half_press;
-static int open_req = -1, shutter_req, shot_done_req, shot_pending;
+static volatile int half_press;
+static int shutter_req, wind_req, shot_done_req, shot_pending;
 static volatile int battery = 100;
 static volatile int cr2_pending;            /* frames shot whose CR2 the app is still writing */
 
 void mf_set_pending(int n) { cr2_pending = n < 0 ? 0 : n; }
-
-void mf_key(int k)
-{
-    pthread_mutex_lock(&in_lock);
-    int next = (kq_tail + 1) % 64;
-    if (next != kq_head) { keyq[kq_tail] = k; kq_tail = next; }
-    pthread_mutex_unlock(&in_lock);
-}
-
-static int key_pop(void)
-{
-    pthread_mutex_lock(&in_lock);
-    int k = FK_NONE;
-    if (kq_head != kq_tail) { k = keyq[kq_head]; kq_head = (kq_head + 1) % 64; }
-    pthread_mutex_unlock(&in_lock);
-    return k;
-}
-
-void mf_half(int down)
-{
-    half_press = down;
-    if (down && ui_running) abort_req = 1;
-}
-
+void mf_half(int down) { half_press = down; }
 void mf_shutter(void) { pthread_mutex_lock(&in_lock); shutter_req = 1; pthread_mutex_unlock(&in_lock); }
+void mf_wind(void) { pthread_mutex_lock(&in_lock); wind_req = 1; pthread_mutex_unlock(&in_lock); }
 void mf_shot_done(int ok, int dng)
 {
     pthread_mutex_lock(&in_lock);
     shot_done_req = !ok ? -1 : dng ? 2 : 1;
     pthread_mutex_unlock(&in_lock);
 }
-void mf_open(int screen_) { pthread_mutex_lock(&in_lock); if (!ui_running) open_req = screen_; pthread_mutex_unlock(&in_lock); }
 void mf_battery(int percent) { battery = percent < 0 ? 0 : percent > 100 ? 100 : percent; }
-int  mf_ui_running(void) { return ui_running; }
 
 /* ---------------------------------------------------------------- the port */
 
@@ -246,37 +189,8 @@ static void clock_str(char *buf, int size, int with_date)
 }
 
 int  fos_port_ms() { return now_ms(); }
-int  fos_port_key() { return key_pop(); }
-int  fos_port_abort() { return abort_req; }
+int  fos_port_abort() { return 0; }
 void fos_port_sleep(int ms) { sleep_ms(ms); }
-
-void fos_port_present(const uint8_t *rows, int pitch, int y0, int y1) { present_rows(rows, pitch, y0, y1); }
-
-void fos_port_palette()
-{
-    pthread_mutex_lock(&scr_lock);
-    for (int i = 0; i < 256; i++)
-        pal[i] = i == 0 || i == 255 ? fos_pal[i] :
-            settings[FS_SCR_STD] == 1 ? fos_pal[i] :
-            fos_screen_rgb(fos_screen_yuv(i, 235, 0, settings[FS_SCR_SAT], settings[FS_SCR_WARM], settings[FS_SCR_BRIGHT]), 235);
-    pthread_mutex_unlock(&scr_lock);
-    palette_changed();
-}
-
-void fos_port_photo(const uint8_t (*p)[3], int n, int k)
-{
-    pthread_mutex_lock(&scr_lock);
-    for (int i = 1; i < 255; i++)
-    {
-        const uint8_t *c = i <= n ? p[i - 1] : i >= FOS_FIXED_BASE && i < FOS_FIXED_BASE + FOS_FIXED_N ?
-                           fos_fixed_rgb[i - FOS_FIXED_BASE] : (const uint8_t *) "\0\0\0";
-        uint32_t rgb = (uint32_t) (c[0] * k >> 8) << 16 | (uint32_t) (c[1] * k >> 8) << 8 | (uint32_t) (c[2] * k >> 8);
-        pal[i] = settings[FS_SCR_STD] == 1 ? rgb :
-            fos_screen_rgb(fos_screen_yuv_rgb(rgb, 235, 0, settings[FS_SCR_SAT], settings[FS_SCR_WARM], settings[FS_SCR_BRIGHT]), 235);
-    }
-    pthread_mutex_unlock(&scr_lock);
-    palette_changed();
-}
 
 void fos_port_log(const char *msg) { mf_log_fn(msg); }
 int  fos_port_dev_cap() { return 0; }       /* a real clock: the darkroom keeps to its time budget */
@@ -301,7 +215,6 @@ void fos_port_set(int s, int v)
 {
     if (s == FS_SCR_FLIP || s == FS_EXPSIM || s == FS_CANON_OFF) return;
     if (s >= 0 && s < FS_COUNT) settings[s] = v;
-    if (s == FS_SCR_STD || s == FS_SCR_SAT || s == FS_SCR_WARM || s == FS_SCR_BRIGHT) fos_port_palette();
     save_state();
 }
 
@@ -357,8 +270,6 @@ void fos_port_action(int a, int x, int y)
          * (the app writes them in the background), as the page waits for its tables */
         for (int waited = 0; x && cr2_pending > 0 && waited < 180000; waited += 100) sleep_ms(100);
     }
-    if (a == FA_DIM) post_event(MF_EV_DIM, x, 0);
-    if (a == FA_CANON_MENU) post_event(MF_EV_CANON_MENU, 0, 0);
 }
 
 void fos_port_clock(char *buf, int size) { clock_str(buf, size, 0); }
@@ -417,7 +328,7 @@ static void shot_end(int dng)
     }
 }
 
-void mf_roll_info(int out[5], char *film, int film_size)
+void mf_roll_info(int out[6], char *film, int film_size)
 {
     /* read from another thread: a snapshot good enough for a label */
     struct fos_roll r = roll;
@@ -425,6 +336,7 @@ void mf_roll_info(int out[5], char *film, int film_size)
     out[0] = r.loaded; out[1] = r.shot; out[2] = r.exposures;
     out[3] = need_wind;
     out[4] = known ? fos_films[r.film].box_iso : 0;
+    out[5] = r.number;
     if (film && film_size > 0)
         snprintf(film, (size_t) film_size, "%s", r.loaded && r.film >= 0 && r.film < fos_nfilms ? fos_films[r.film].name : "");
 }
@@ -499,6 +411,19 @@ void mf_draw_canister(int film, int exposures, int leader, uint32_t *argb, int w
 void mf_load_roll(int film, int exposures)
 {
     if (film >= 0 && film < fos_nfilms && !roll.loaded) load_roll(film, exposures);
+}
+
+void mf_switch_film(int film, int single_mode)
+{
+    if (film < 0 || film >= fos_nfilms) return;
+    if (!single_mode)
+    {
+        if (!roll.loaded) load_roll(film, 36);
+        return;
+    }
+    if (roll.loaded && roll.film == film && roll.shot < 64) return;
+    if (roll.loaded) rewind_roll();
+    load_roll(film, 64);
 }
 
 void mf_rewind_roll(void)
@@ -617,6 +542,8 @@ static int dk_done = 0;
 static int dk_roll = 0;
 static int dk_film = 0;
 static int dk_size = 0;
+static int dk_push = 0;
+static int dk_target = 0;
 static char dk_dcim[160] = "";
 
 void mf_dev_close(void)
@@ -626,9 +553,10 @@ void mf_dev_close(void)
     dk_nframes = 0;
     dk_fi = 0;
     dk_done = 0;
+    dk_target = 0;
 }
 
-int mf_dev_open(int roll_no, int size)
+int mf_dev_open(int roll_no, int size, int push_stops, int target_frame)
 {
     mf_dev_close();
     struct fos_lab_roll rolls[32];
@@ -641,6 +569,8 @@ int mf_dev_open(int roll_no, int size)
     dk_roll = roll_no;
     dk_film = film;
     dk_size = fos_clamp(size, 0, FOS_SIZES - 1);
+    dk_push = fos_clamp(push_stops, -2, 2);
+    dk_target = target_frame;
     dk_nframes = fos_lab_frames(roll_no, dk_frames, 64);
     if (dk_nframes <= 0) return 0;
 
@@ -650,9 +580,9 @@ int mf_dev_open(int roll_no, int size)
         if (dk_frames[i].when[0] && (!first || strcmp(dk_frames[i].when, first) < 0)) first = dk_frames[i].when;
     if (fos_lab_dcim_dir(dk_dcim, sizeof(dk_dcim), roll_no, film, first) < 0) dk_dcim[0] = 0;
 
-    /* wait if a CR2 is still being written on the card */
+    /* wait if a CR2/DNG is still being written on the card */
     for (int w = 0; cr2_pending > 0 && w < 10000; w += 100) sleep_ms(100);
-    return dk_nframes;
+    return dk_target > 0 ? 1 : dk_nframes;
 }
 
 int mf_dev_step(int budget_ms, int out[3])
@@ -663,6 +593,7 @@ int mf_dev_step(int budget_ms, int out[3])
         while (dk_fi < dk_nframes)
         {
             const struct fos_lab_frame *f = &dk_frames[dk_fi++];
+            if (dk_target > 0 && f->no != dk_target) continue;
             char path[64], jpeg[220] = "";
             fos_lab_print_path(path, sizeof(path), dk_roll, f->no);
             if (dk_dcim[0])
@@ -676,7 +607,7 @@ int mf_dev_step(int budget_ms, int out[3])
             char full_prn[300], full_jpg[300];
             snprintf(full_prn, sizeof(full_prn), "%s%s", card, path);
             snprintf(full_jpg, sizeof(full_jpg), "%s%s", card, jpeg);
-            if (stat(full_prn, &st1) == 0 && (!jpeg[0] || f->missing || stat(full_jpg, &st2) == 0))
+            if (dk_target == 0 && stat(full_prn, &st1) == 0 && (!jpeg[0] || f->missing || stat(full_jpg, &st2) == 0))
             {
                 dk_done++;
                 continue;
@@ -691,6 +622,7 @@ int mf_dev_step(int budget_ms, int out[3])
                 fos_dev_big(dk_dev, dk_size, zoom);
             }
             if (dk_dev && settings[FS_STAMP]) fos_dev_stamp(dk_dev, 1);
+            if (dk_dev && dk_push != 0) fos_dev_push(dk_dev, (float) dk_push);
             if (dk_dev) break;
             dk_done++;
         }
@@ -752,117 +684,11 @@ int mf_dev_preview_bmp(uint32_t *argb, int w, int h)
     return ok;
 }
 
-/* ---------------------------------------------------------------- LiveView */
+/* ---------------------------------------------------------------- camera loop */
 
-static struct fos_hud_palette hud_pal;
-
-static void hud_palette(void)
-{
-    pthread_mutex_lock(&scr_lock);
-    memset(pal, 0, sizeof(pal));
-    hud_pal.clear = 0;
-    hud_pal.black = 1;  pal[1] = 0x000000;
-    hud_pal.white = 2;  pal[2] = 0xFFFFFF;
-    hud_pal.red = 3;    pal[3] = 0xFF2A1A;
-    hud_pal.dark_red = 4; pal[4] = 0x5A0E08;
-    for (int i = 0; i <= 100; i++)
-    {
-        int v = i * 255 / 100;
-        hud_pal.gray[i] = (uint8_t) (5 + i);
-        pal[5 + i] = (uint32_t) (v << 16 | v << 8 | v);
-    }
-    pthread_mutex_unlock(&scr_lock);
-    palette_changed();
-}
-
-static int meter_wobble;
-static uint8_t hud_buf[FOS_W * FOS_H];
-
-static void hud_draw(int now)
-{
-    memset(hud_buf, hud_pal.clear, sizeof(hud_buf));
-    if (settings[FS_HUD] && roll.loaded)
-    {
-        struct fos_hud h;
-        memset(&h, 0, sizeof(h));
-        h.lit = !settings[FS_LEDS] || half_press || now < leds_until;
-        h.blink = (now / 250) & 1;
-        h.fstop = settings[FS_FSTOP];
-        h.widest = settings[FS_LENS_WIDE];
-        if (h.lit)
-        {
-            h.meter = 1;
-            h.want = fos_clamp(h.fstop + meter_wobble, 0, fos_nfstops - 1);
-        }
-        static const char *speeds[] = { "60", "125", "250", "500" };
-        snprintf(h.shutter, sizeof(h.shutter), "%s", speeds[fos_clamp(settings[FS_FSTOP] / 4, 0, 3)]);
-        h.frame = roll.shot + 1;
-        h.exposures = roll.exposures;
-        h.finished = FINISHED;
-        h.need_wind = need_wind;
-        h.focus_screen = settings[FS_FOCUS];
-        h.film = fos_films[fos_clamp(roll.film, 0, fos_nfilms - 1)].name;
-        h.iso = fos_films[fos_clamp(roll.film, 0, fos_nfilms - 1)].box_iso;
-        h.style = fos_clamp(settings[FS_HUD_STYLE], 0, FOS_HUD_STYLES - 1);
-        h.flash = now < leds_until;
-        h.batt = settings[FS_HUD_BATT] ? fos_port_battery(&h.batt_exact) : -1;
-        fos_hud_draw(hud_buf, FOS_W, &h, &hud_pal);
-    }
-    present_rows(hud_buf, FOS_W, 0, FOS_H);
-}
-
-static void open_ui(int open)
-{
-    ui_running = 1;
-    abort_req = 0;
-    post_event(MF_EV_MODE, 1, 0);
-    fos_ui_run(open);
-    ui_running = 0;
-    abort_req = 0;
-    pthread_mutex_lock(&in_lock);
-    kq_head = kq_tail = 0;
-    pthread_mutex_unlock(&in_lock);
-    hud_palette();
-    save_state();
-    post_event(MF_EV_MODE, 0, 0);
-}
-
-/* a key on the plain LiveView screen, as web.c's lv_key */
-static void lv_key(int k)
-{
-    if (k & FK_RELEASE) return;
-    if (k == FK_HOME || k == FK_MENU) { open_req = FOS_OPEN_HOME; return; }
-    if (k == FK_PLAY) { open_req = FOS_OPEN_PRINTS; return; }
-    if (!roll.loaded)
-    {
-        if (k == FK_SET) open_req = FOS_OPEN_SHELF;
-        return;
-    }
-    if (!FINISHED && settings[FS_APKEYS] == 1 && (k == FK_UP || k == FK_DOWN || k == FK_WHEEL_L || k == FK_WHEEL_R))
-    {
-        int dir = k == FK_UP || k == FK_WHEEL_R ? 1 : -1;
-        settings[FS_FSTOP] = fos_clamp(settings[FS_FSTOP] + dir, settings[FS_LENS_WIDE], fos_nfstops - 1);
-        leds_until = now_ms() + 2000;
-        return;
-    }
-    if (FINISHED)
-    {
-        if (k == FK_SET) open_req = FOS_OPEN_END;
-        return;
-    }
-    if (need_wind && k == FK_SET)
-    {
-        need_wind = 0;
-        leds_until = now_ms() + 1500;
-        save_state();
-        post_event(MF_EV_WIND, 0, 0);
-    }
-}
-
-/* the shutter, fully pressed: a frame if the roll can take one */
 static void shutter(void)
 {
-    if (shot_pending || ui_running || !roll.loaded || FINISHED || need_wind) return;
+    if (shot_pending || !roll.loaded || FINISHED || need_wind) return;
     shot_pending = file_no + 1;
     post_event(MF_EV_CAPTURE, shot_pending, 0);
 }
@@ -871,11 +697,10 @@ void mf_run(void)
 {
     for (;;)
     {
-        int now = now_ms();
-        int o = -1, fire = 0, done = 0;
+        int fire = 0, wind = 0, done = 0;
         pthread_mutex_lock(&in_lock);
-        o = open_req; open_req = -1;
         fire = shutter_req; shutter_req = 0;
+        wind = wind_req; wind_req = 0;
         done = shot_done_req; shot_done_req = 0;
         pthread_mutex_unlock(&in_lock);
 
@@ -884,21 +709,14 @@ void mf_run(void)
             if (done > 0) shot_end(done == 2);
             shot_pending = 0;
         }
-        if (o >= 0 && !shot_pending)
+        if (wind && need_wind)
         {
-            open_ui(o);
-            continue;
+            need_wind = 0;
+            save_state();
+            post_event(MF_EV_WIND, 0, 0);
         }
         if (fire) shutter();
-        int k;
-        while ((k = key_pop()) != FK_NONE)
-        {
-            lv_key(k);
-            if (open_req >= 0) break;
-        }
-        if ((now / 700) % 4 == 0) meter_wobble = (now / 2800) % 3 - 1;
-        hud_draw(now);
-        sleep_ms(50);
+        sleep_ms(30);
     }
 }
 
@@ -925,10 +743,6 @@ int mf_init(const char *files_dir, const char *card_dir)
     snprintf(font, sizeof(font), "%s/%s", files_dir, FOS_FONT_FILE);
     snprintf(films, sizeof(films), "%s/%s", files_dir, FOS_FILM_FILE);
     if (!file_ok(font)) { logf_("no fonts at %s", font); return -1; }
-    /* The film OS keeps a card's paths in 64 or 128 bytes, as a camera's card
-     * is "B:/". The app's folder is 70 characters before DCIM/..., so the
-     * logs and RAWs were cut short and the darkroom found no frames: the card
-     * is the working directory, and its paths start "./". */
     mkdirs(card_dir);
     if (chdir(card_dir)) { logf_("can't go into the card %s: %s", card_dir, strerror(errno)); return -1; }
     snprintf(card, sizeof(card), "./");
@@ -944,11 +758,10 @@ int mf_init(const char *files_dir, const char *card_dir)
     setenv("FOS_CARD", card, 1);
 
     if (!load_state()) scan_card();
-    fos_ui_init();
+    fos_gfx_init();
     sim_fonts();
     sim_films();
     if (roll.film >= fos_nfilms) roll.loaded = 0;
-    hud_palette();
     logf_("card %s, roll %d (%s), last frame IMG_%04d", card, roll.number, roll.loaded ? "loaded" : "none", file_no);
     return 0;
 }

@@ -1,7 +1,7 @@
-/* Runs the Android port on a PC, as the app would: a script of keys and
- * shots, the screen saved as PPMs.
+/* Runs the Android port on a PC, as the app would: a script of
+ * shots.
  *   smoke FILES_DIR CARD_DIR OUT_DIR  cmd...
- *   cmds: w<ms> (wait)  k<key> (press+release)  s (shoot)  d<name> (dump screen)  h1/h0 (half) */
+ *   cmds: w<ms> (wait)  s (shoot)  h1/h0 (half)  l<film> (load 36)  n (wind) */
 
 #include <pthread.h>
 #include <stdio.h>
@@ -11,7 +11,6 @@
 #include "../app/src/main/cpp/mfilm_port.h"
 
 static const char *outdir, *card;
-static uint32_t frame[MF_W * MF_H];
 static int shots;
 
 static void *run(void *x) { mf_run(); return 0; }
@@ -51,22 +50,6 @@ static void wait_ms(int ms)
     events();
 }
 
-static void dump(const char *name)
-{
-    mf_frame(frame, 1);
-    char path[600];
-    snprintf(path, sizeof(path), "%s/%s.ppm", outdir, name);
-    FILE *f = fopen(path, "wb");
-    fprintf(f, "P6\n%d %d\n255\n", MF_W, MF_H);
-    for (int i = 0; i < MF_W * MF_H; i++)
-    {
-        uint32_t c = frame[i];
-        if (!(c >> 24)) c = 0x3060A0;       /* LiveView: blue */
-        fputc(c >> 16 & 255, f); fputc(c >> 8 & 255, f); fputc(c & 255, f);
-    }
-    fclose(f);
-}
-
 int main(int argc, char **argv)
 {
     if (argc < 4) return 2;
@@ -78,14 +61,14 @@ int main(int argc, char **argv)
     {
         const char *c = argv[i];
         if (c[0] == 'w') wait_ms(atoi(c + 1));
-        else if (c[0] == 'k') { mf_key(atoi(c + 1)); wait_ms(80); mf_key(atoi(c + 1) | 0x100); wait_ms(150); }
+        else if (c[0] == 'l') { mf_load_roll(atoi(c + 1), 36); wait_ms(100); }
+        else if (c[0] == 'n') { mf_wind(); wait_ms(100); }
         else if (c[0] == 's') { mf_half(1); wait_ms(100); mf_shutter(); mf_half(0); wait_ms(600); }
-        else if (c[0] == 'd') dump(c + 1);
         else if (c[0] == 'h') mf_half(c[1] == '1');
     }
-    int r[5];
+    int r[6];
     char film[64];
     mf_roll_info(r, film, sizeof(film));
-    printf("roll: loaded %d, %d/%d, %s; shots %d\n", r[0], r[1], r[2], film, shots);
+    printf("roll: loaded %d, %d/%d, %s (#%d); shots %d\n", r[0], r[1], r[2], film, r[5], shots);
     return 0;
 }
