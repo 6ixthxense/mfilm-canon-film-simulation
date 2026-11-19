@@ -119,6 +119,7 @@ class MainActivity : ComponentActivity() {
     private var sensorManager: SensorManager? = null
     private var pendingImportUris by mutableStateOf<List<Uri>>(emptyList())
     private var importing by mutableStateOf(false)
+    private var importProgress by mutableStateOf("")
 
     private val filmCatalog by lazy { loadFilmCatalog() }
 
@@ -151,7 +152,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val pickGallery = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        if (uris.isNotEmpty()) pendingImportUris = uris.take(36)
+        if (uris.isNotEmpty()) pendingImportUris = uris.take(60)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -353,13 +354,16 @@ class MainActivity : ComponentActivity() {
                     onBack = { ui.route = Route.CAMERA },
                 )
                 Route.DARKROOM -> DarkroomScreen(
-                    pendingImportCount = pendingImportUris.size,
+                    pendingImportUris = pendingImportUris,
                     importing = importing,
+                    importProgress = importProgress,
                     onRequestImport = { pickGallery.launch("image/*") },
-                    onConfirmImport = { filmIdx, size, pushStops, grainPct, halPct ->
+                    onConfirmImport = { filmIdx, filmName, pushEv, grainPct, halPct, lightLeak, dust, rebate ->
                         val uris = pendingImportUris
                         pendingImportUris = emptyList()
-                        if (uris.isNotEmpty()) importGalleryRoll(uris, filmIdx, size, pushStops, grainPct, halPct)
+                        if (uris.isNotEmpty()) {
+                            exportImportedPhotos(uris, filmIdx, filmName, pushEv, grainPct, halPct, lightLeak, dust, rebate)
+                        }
                     },
                     onCancelImport = { pendingImportUris = emptyList() },
                     onDevelop = { rollNo, size, pushStops, grainPct, halPct ->
@@ -920,39 +924,49 @@ class MainActivity : ComponentActivity() {
         } catch (_: Throwable) { }
     }
 
-    private fun importGalleryRoll(
+    private fun exportImportedPhotos(
         uris: List<Uri>,
         filmIdx: Int,
-        size: Int,
-        pushStops: Int,
+        filmName: String,
+        pushEv: Float,
         grainPct: Int,
         halPct: Int,
+        lightLeak: Int,
+        dust: Int,
+        rebate: Boolean,
     ) {
         importing = true
+        importProgress = "GRADING 1 OF ${uris.size}…"
         captureExecutor.execute {
             try {
-                val firstFile = IntArray(1)
-                val rollNo = Native.importRoll(filmIdx, uris.size, firstFile)
-                if (rollNo > 0) {
-                    val ok = card.importImagesAsCr2(uris, firstFile[0])
-                    runOnUiThread {
-                        importing = false
-                        if (ok > 0) {
-                            DevelopService.start(this, rollNo, size, pushStops, 0, grainPct, halPct)
-                        } else {
-                            Toast.makeText(this, "Could not decode selected photos", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                } else {
-                    runOnUiThread {
-                        importing = false
-                        Toast.makeText(this, "Could not create import roll", Toast.LENGTH_SHORT).show()
+                val saved = card.exportImportedBatch(
+                    uris = uris,
+                    filmIdx = filmIdx,
+                    filmName = filmName,
+                    pushEv = pushEv,
+                    grainPct = grainPct,
+                    halPct = halPct,
+                    lightLeakMode = lightLeak,
+                    dustMode = dust,
+                    rebateBorder = rebate,
+                ) { done, total ->
+                    runOnUiThread { importProgress = "SAVING $done OF $total…" }
+                }
+                runOnUiThread {
+                    importing = false
+                    importProgress = ""
+                    if (saved > 0) {
+                        DevelopState.status = "Saved $saved original-size photo${if (saved == 1) "" else "s"} ($filmName) to Pictures/M-Film"
+                        Toast.makeText(this, "Saved $saved photo${if (saved == 1) "" else "s"} to Pictures/M-Film", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this, "Could not export selected photos", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (t: Throwable) {
-                Log.e(Card.TAG, "importGalleryRoll", t)
+                Log.e(Card.TAG, "exportImportedPhotos", t)
                 runOnUiThread {
                     importing = false
+                    importProgress = ""
                     Toast.makeText(this, "Import error: ${t.message}", Toast.LENGTH_SHORT).show()
                 }
             }

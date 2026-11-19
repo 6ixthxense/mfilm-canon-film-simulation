@@ -160,6 +160,10 @@ struct fos_dev *fos_dev_start_raw(const struct fos_raw *r, const char *print, in
  * middle 3:2 as the picture. 0 and err on failure (fos_dng.c). fos_dev_start
  * develops a frame whose name ends in .DNG this way by itself. */
 int fos_dng_load(const char *path, int kelvin, struct fos_raw *r, uint16_t **mosaic, char *err, int err_size);
+/* grade an RGBA_8888 (R=byte0, G=byte1, B=byte2, A=byte3) image in place through
+ * the film's 3D LUT, halation, vignette and grain at its original w x h. 1 on success */
+int fos_dev_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
+                       float push_ev, int grain_pct, int hal_pct, unsigned seed);
 #ifdef FOS_DEV_TEST
 /* what a CR2's frame was read as, once it is decoded (r->px: NULL), so
  * devtest can develop the same mosaic through fos_dev_start_raw */

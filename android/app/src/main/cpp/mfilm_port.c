@@ -668,6 +668,15 @@ void mf_dev_set_recipe(int grain_pct, int hal_pct)
     dk_hal = fos_clamp(hal_pct, 0, 200);
 }
 
+int mf_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
+                  float push_ev, int grain_pct, int hal_pct, unsigned seed)
+{
+    char cache[64];
+    fos_lab_cache_dir(cache, sizeof(cache));
+    fos_dev_cache(cache);
+    return fos_dev_grade_rgba(rgba, w, h, stride_px, film, push_ev, grain_pct, hal_pct, seed);
+}
+
 const char *mf_dev_error(void) { return dk_err; }
 
 void mf_dev_close(void)
