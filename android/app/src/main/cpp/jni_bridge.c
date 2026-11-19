@@ -171,6 +171,16 @@ JNIEXPORT jboolean JNICALL FN(labHasRaws)(JNIEnv *env, jclass cls, jint rollNo)
     return mf_lab_has_raws(rollNo) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jint JNICALL FN(labSetFilm)(JNIEnv *env, jclass cls, jint rollNo, jint filmIdx)
+{
+    return mf_lab_set_film(rollNo, filmIdx);
+}
+
+JNIEXPORT void JNICALL FN(devSetRecipe)(JNIEnv *env, jclass cls, jint grainPct, jint halPct)
+{
+    mf_dev_set_recipe(grainPct, halPct);
+}
+
 JNIEXPORT jint JNICALL FN(importRoll)(JNIEnv *env, jclass cls, jint film, jint count, jintArray outFirst)
 {
     int first = 0;

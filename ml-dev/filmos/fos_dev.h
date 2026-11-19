@@ -127,6 +127,8 @@ int  fos_dev_made(const struct fos_dev *d, int *w, int *h);     /* FOS_SIZE_*, a
 void fos_dev_stamp(struct fos_dev *d, int on);
 /* push/pull process compensation in stops (before the first step) */
 void fos_dev_push(struct fos_dev *d, float ev);
+/* grain and halation intensity percentage (0..200, default 100; before the first step) */
+void fos_dev_recipe(struct fos_dev *d, int grain_pct, int hal_pct);
 /* forget the film table (leaving the darkroom) */
 void fos_dev_release();
 

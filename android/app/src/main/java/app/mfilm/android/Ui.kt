@@ -188,10 +188,21 @@ class Ui {
     var framelines by mutableStateOf(true)
     var printsRoll by mutableIntStateOf(-1)
     var defaultPrintSize by mutableIntStateOf(1)    // 0=S, 1=M, 2=L (for SINGLE mode)
+    var aspectFormat by mutableIntStateOf(0)        // 0=3:2, 1=6x6 (1:1), 2=XPan (65:24)
+    var filmRebate by mutableStateOf(false)         // 35mm sprocket border on prints
+    var lightLeakMode by mutableIntStateOf(0)       // 0=OFF, 1=SUBTLE, 2=HEAVY
+    var dustMode by mutableIntStateOf(0)            // 0=OFF, 1=SUBTLE, 2=VINTAGE
+    var wbMode by mutableIntStateOf(0)              // 0=AWB, 1=DAY, 2=TNG, 3=SHD
+    var showHistogram by mutableStateOf(true)
+    var histogram by mutableStateOf<FloatArray?>(null)
+    var highlightClipped by mutableStateOf(false)
     var flashMode by mutableIntStateOf(0)           // 0=OFF, 1=AUTO, 2=ON
     var frontCamera by mutableStateOf(false)
     var shutterFlash by mutableStateOf(false)
 }
+
+val WB_LABELS = listOf("AWB", "DAY", "TNG", "SHD")
+val FORMAT_LABELS = listOf("3:2", "6×6", "XPN")
 
 /** What the controls do. */
 class Actions(
@@ -218,6 +229,8 @@ class Actions(
     val setLoupe: (Boolean) -> Unit,
     val toggleFlash: () -> Unit,
     val toggleCamera: () -> Unit,
+    val toggleFormat: () -> Unit,
+    val toggleWb: () -> Unit,
 )
 
 // ---------------------------------------------------------------- the controls
@@ -682,6 +695,45 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
                 val maskX = if (ui.halfFirstReady) 0f else mx
                 drawRect(Color(0x99000000), Offset(maskX, 0f), Size(mx, size.height))
                 drawLine(Look.Brass.copy(alpha = 0.8f), Offset(mx, 0f), Offset(mx, size.height), 1.5.dp.toPx())
+            } else if (ui.aspectFormat == 1) {
+                // 6x6 Medium Format (1:1) matte letterbox
+                val sq = minOf(size.width, size.height)
+                val maskCol = Color(0xCC000000)
+                val lineCol = Look.Brass.copy(alpha = 0.65f)
+                val lw = 1.dp.toPx()
+                if (size.width > size.height) {
+                    val bar = (size.width - sq) / 2f
+                    drawRect(maskCol, Offset(0f, 0f), Size(bar, size.height))
+                    drawRect(maskCol, Offset(size.width - bar, 0f), Size(bar, size.height))
+                    drawLine(lineCol, Offset(bar, 0f), Offset(bar, size.height), lw)
+                    drawLine(lineCol, Offset(size.width - bar, 0f), Offset(size.width - bar, size.height), lw)
+                } else {
+                    val bar = (size.height - sq) / 2f
+                    drawRect(maskCol, Offset(0f, 0f), Size(size.width, bar))
+                    drawRect(maskCol, Offset(0f, size.height - bar), Size(size.width, bar))
+                    drawLine(lineCol, Offset(0f, bar), Offset(size.width, bar), lw)
+                    drawLine(lineCol, Offset(0f, size.height - bar), Offset(size.width, size.height - bar), lw)
+                }
+            } else if (ui.aspectFormat == 2) {
+                // Hasselblad XPan (65:24 Panoramic) matte letterbox
+                val maskCol = Color(0xDD000000)
+                val lineCol = Look.Brass.copy(alpha = 0.75f)
+                val lw = 1.dp.toPx()
+                if (size.width >= size.height) {
+                    val panH = (size.width * 24f / 65f).coerceAtMost(size.height)
+                    val bar = (size.height - panH) / 2f
+                    drawRect(maskCol, Offset(0f, 0f), Size(size.width, bar))
+                    drawRect(maskCol, Offset(0f, size.height - bar), Size(size.width, bar))
+                    drawLine(lineCol, Offset(0f, bar), Offset(size.width, bar), lw)
+                    drawLine(lineCol, Offset(0f, size.height - bar), Offset(size.width, size.height - bar), lw)
+                } else {
+                    val panW = (size.height * 24f / 65f).coerceAtMost(size.width)
+                    val bar = (size.width - panW) / 2f
+                    drawRect(maskCol, Offset(0f, 0f), Size(bar, size.height))
+                    drawRect(maskCol, Offset(size.width - bar, 0f), Size(bar, size.height))
+                    drawLine(lineCol, Offset(bar, 0f), Offset(bar, size.height), lw)
+                    drawLine(lineCol, Offset(size.width - bar, 0f), Offset(size.width - bar, size.height), lw)
+                }
             }
 
             if (!ui.cleanFinder && ui.framelines) {
@@ -753,7 +805,7 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
                 }
             }
 
-            // Top-left status badges: 2.5X loupe, 2X double exposure, 1/2 half-frame
+            // Top-left status badges: 2.5X loupe, 2X double exposure, 1/2 half-frame, format, WB
             var topY = 8.dp.toPx()
             if (ui.mfLoupe) {
                 val m = text.measure("2.5X FOCUS", engraved(10.sp, Look.Amber))
@@ -770,6 +822,41 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
                 val tag = if (ui.halfFirstReady) "HALF · R READY" else "HALF · L"
                 val m = text.measure(tag, engraved(10.sp, Look.Amber))
                 drawText(m, topLeft = Offset(10.dp.toPx(), topY))
+                topY += m.size.height + 4.dp.toPx()
+            } else if (ui.aspectFormat != 0) {
+                val tag = if (ui.aspectFormat == 1) "6×6" else "XPAN 65:24"
+                val m = text.measure(tag, engraved(10.sp, Look.Amber))
+                drawText(m, topLeft = Offset(10.dp.toPx(), topY))
+                topY += m.size.height + 4.dp.toPx()
+            }
+            if (ui.wbMode != 0) {
+                val wb = WB_LABELS.getOrElse(ui.wbMode) { "AWB" }
+                val m = text.measure("WB · $wb", engraved(9.sp, Look.Amber))
+                drawText(m, topLeft = Offset(10.dp.toPx(), topY))
+            }
+
+            // Live luminance histogram & highlight clipping LED (top-right, when timer idle)
+            if (!ui.cleanFinder && ui.showHistogram && ui.timerRemaining == 0) {
+                val hist = ui.histogram
+                if (hist != null && hist.isNotEmpty()) {
+                    val hw = 68.dp.toPx()
+                    val hh = 22.dp.toPx()
+                    val hx = size.width - hw - 10.dp.toPx()
+                    val hy = 8.dp.toPx()
+                    drawRect(Look.Window.copy(alpha = 0.65f), Offset(hx, hy), Size(hw, hh))
+                    drawRect(Look.Brass.copy(alpha = 0.45f), Offset(hx, hy), Size(hw, hh), style = Stroke(0.75.dp.toPx()))
+                    val bw = hw / hist.size
+                    for (i in hist.indices) {
+                        val bh = (hist[i].coerceIn(0f, 1f) * (hh - 2.dp.toPx()))
+                        if (bh > 0.5f) {
+                            val col = if (i >= hist.size - 2 && ui.highlightClipped) Look.Red else Look.Ivory.copy(alpha = 0.78f)
+                            drawRect(col, Offset(hx + i * bw, hy + hh - bh - 1.dp.toPx()), Size((bw - 0.5f).coerceAtLeast(1f), bh))
+                        }
+                    }
+                    if (ui.highlightClipped) {
+                        drawCircle(Look.Red, 3.dp.toPx(), Offset(hx - 7.dp.toPx(), hy + hh / 2f))
+                    }
+                }
             }
 
             // Self-timer blinking red LED & countdown
@@ -841,11 +928,17 @@ private fun Level(ui: Ui, preview: View, on: Actions) {
                     Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TMR", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(30.dp, 36.dp), onClick = on.toggleTimer)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(26.dp, 36.dp), onClick = on.toggleDoubleExp)
-                    Key("½", color = if (ui.halfFrame) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(24.dp, 36.dp), onClick = on.toggleHalfFrame)
+                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(26.dp, 34.dp), onClick = on.toggleDoubleExp)
+                    Key("½", color = if (ui.halfFrame) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(22.dp, 34.dp), onClick = on.toggleHalfFrame)
                     val flsLabel = when (ui.flashMode) { 1 -> "FA"; 2 -> "F1"; else -> "FL" }
-                    Key(flsLabel, color = if (ui.flashMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(24.dp, 36.dp), onClick = on.toggleFlash)
-                    Key(if (ui.frontCamera) "FR" else "CM", color = if (ui.frontCamera) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(24.dp, 36.dp), onClick = on.toggleCamera)
+                    Key(flsLabel, color = if (ui.flashMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(24.dp, 34.dp), onClick = on.toggleFlash)
+                    Key(if (ui.frontCamera) "FR" else "CM", color = if (ui.frontCamera) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(24.dp, 34.dp), onClick = on.toggleCamera)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val fmtLabel = FORMAT_LABELS.getOrElse(ui.aspectFormat) { "3:2" }
+                    val wbLabel = WB_LABELS.getOrElse(ui.wbMode) { "AWB" }
+                    Key(fmtLabel, color = if (ui.aspectFormat != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(40.dp, 34.dp), onClick = on.toggleFormat)
+                    Key(wbLabel, color = if (ui.wbMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(40.dp, 34.dp), onClick = on.toggleWb)
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     PrintsKey(DevelopState.running, onClick = on.prints)
@@ -899,14 +992,20 @@ private fun Level(ui: Ui, preview: View, on: Actions) {
 private fun Upright(ui: Ui, preview: View, on: Actions) {
     Column(Modifier.fillMaxSize()) {
         Row(
-            Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 18.dp),
+            Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
         ) {
             if (!ui.cleanFinder) {
-                Label(if (ui.loaded) ui.film else "No film", size = 14.sp)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (ui.loaded) Label("ISO ${ui.iso}", size = 14.sp, color = Look.Dim)
-                    Key("Manual", color = Look.Dim, onClick = on.settings)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Label(if (ui.loaded) ui.film else "No film", size = 14.sp)
+                    if (ui.loaded) Label("${ui.iso}", size = 12.sp, color = Look.Dim)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    val fmtLabel = FORMAT_LABELS.getOrElse(ui.aspectFormat) { "3:2" }
+                    val wbLabel = WB_LABELS.getOrElse(ui.wbMode) { "AWB" }
+                    Key(fmtLabel, color = if (ui.aspectFormat != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(38.dp, 40.dp), onClick = on.toggleFormat)
+                    Key(wbLabel, color = if (ui.wbMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(38.dp, 40.dp), onClick = on.toggleWb)
+                    Key("Manual", color = Look.Dim, modifier = Modifier.defaultMinSize(50.dp, 40.dp), onClick = on.settings)
                 }
             } else {
                 Spacer(Modifier.width(1.dp))

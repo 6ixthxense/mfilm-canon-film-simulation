@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">M-Film</string>
+    <string name="shortcut_shelf">Film Shelf</string>
+    <string name="shortcut_darkroom">Darkroom</string>
+    <string name="shortcut_prints">Prints</string>
 </resources>

@@ -96,6 +96,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val captureExecutor = Executors.newSingleThreadExecutor()
+    private val histExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var soundPool: SoundPool? = null
     private var sfxShutter = 0
@@ -187,6 +188,11 @@ class MainActivity : ComponentActivity() {
         ui.filmPreviewMode = prefs.getInt("film_preview_mode", 2).coerceIn(0, 2)
         ui.singleShot = prefs.getBoolean("single_shot", false)
         ui.defaultPrintSize = prefs.getInt("default_print_size", 1).coerceIn(0, 2)
+        ui.aspectFormat = prefs.getInt("aspect_format", 0).coerceIn(0, 2)
+        ui.filmRebate = prefs.getBoolean("film_rebate", false)
+        ui.lightLeakMode = prefs.getInt("light_leak_mode", 0).coerceIn(0, 2)
+        ui.dustMode = prefs.getInt("dust_mode", 0).coerceIn(0, 2)
+        ui.showHistogram = prefs.getBoolean("show_histogram", true)
         ui.gpsTag = prefs.getBoolean("gps_tag", false)
         ui.autoCleanRaw = prefs.getBoolean("auto_clean_raw", false)
         ui.realisticWind = Native.getSetting(Native.SET_WIND) != 0
@@ -301,6 +307,20 @@ class MainActivity : ComponentActivity() {
                 }
                 startCamera()
             },
+            toggleFormat = {
+                ui.aspectFormat = (ui.aspectFormat + 1) % 3
+                prefs.edit().putInt("aspect_format", ui.aspectFormat).apply()
+                if (ui.aspectFormat != 0 && ui.halfFrame) {
+                    ui.halfFrame = false
+                    halfFirst?.recycle(); halfFirst = null
+                    ui.halfFirstReady = false
+                    startCamera()
+                }
+            },
+            toggleWb = {
+                ui.wbMode = (ui.wbMode + 1) % 4
+                applyCamera2Controls()
+            },
         )
 
         setContent {
@@ -336,13 +356,15 @@ class MainActivity : ComponentActivity() {
                     pendingImportCount = pendingImportUris.size,
                     importing = importing,
                     onRequestImport = { pickGallery.launch("image/*") },
-                    onConfirmImport = { filmIdx, size, pushStops ->
+                    onConfirmImport = { filmIdx, size, pushStops, grainPct, halPct ->
                         val uris = pendingImportUris
                         pendingImportUris = emptyList()
-                        if (uris.isNotEmpty()) importGalleryRoll(uris, filmIdx, size, pushStops)
+                        if (uris.isNotEmpty()) importGalleryRoll(uris, filmIdx, size, pushStops, grainPct, halPct)
                     },
                     onCancelImport = { pendingImportUris = emptyList() },
-                    onDevelop = { rollNo, size, pushStops -> DevelopService.start(this, rollNo, size, pushStops, 0) },
+                    onDevelop = { rollNo, size, pushStops, grainPct, halPct ->
+                        DevelopService.start(this, rollNo, size, pushStops, 0, grainPct, halPct)
+                    },
                     onCancel = { DevelopService.stop(this) },
                     onOpenPrints = { rollNo -> ui.printsRoll = rollNo; ui.route = Route.PRINTS },
                     onBack = { pendingImportUris = emptyList(); updateLabel(); ui.route = Route.CAMERA },
@@ -365,6 +387,22 @@ class MainActivity : ComponentActivity() {
                         ui.defaultPrintSize = (ui.defaultPrintSize + 1) % 3
                         prefs.edit().putInt("default_print_size", ui.defaultPrintSize).apply()
                     },
+                    onToggleFormat = {
+                        ui.aspectFormat = (ui.aspectFormat + 1) % 3
+                        prefs.edit().putInt("aspect_format", ui.aspectFormat).apply()
+                    },
+                    onToggleRebate = {
+                        ui.filmRebate = !ui.filmRebate
+                        prefs.edit().putBoolean("film_rebate", ui.filmRebate).apply()
+                    },
+                    onToggleLightLeak = {
+                        ui.lightLeakMode = (ui.lightLeakMode + 1) % 3
+                        prefs.edit().putInt("light_leak_mode", ui.lightLeakMode).apply()
+                    },
+                    onToggleDust = {
+                        ui.dustMode = (ui.dustMode + 1) % 3
+                        prefs.edit().putInt("dust_mode", ui.dustMode).apply()
+                    },
                     onToggleWind = {
                         ui.realisticWind = !ui.realisticWind
                         Native.setSetting(Native.SET_WIND, if (ui.realisticWind) 1 else 0)
@@ -381,6 +419,14 @@ class MainActivity : ComponentActivity() {
                     onToggleSpiritLevel = {
                         ui.spiritLevel = !ui.spiritLevel
                         prefs.edit().putBoolean("spirit_level", ui.spiritLevel).apply()
+                    },
+                    onToggleHistogram = {
+                        ui.showHistogram = !ui.showHistogram
+                        prefs.edit().putBoolean("show_histogram", ui.showHistogram).apply()
+                        if (!ui.showHistogram) {
+                            ui.histogram = null
+                            ui.highlightClipped = false
+                        }
                     },
                     onToggleLiveLook = {
                         ui.filmPreviewMode = (ui.filmPreviewMode + 1) % 3
@@ -427,20 +473,28 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-            when (intent.getStringExtra("route")) {
-                "shelf" -> ui.route = Route.SHELF
-                "roll" -> ui.route = Route.ROLL
-                "darkroom" -> ui.route = Route.DARKROOM
-                "prints" -> ui.route = Route.PRINTS
-                "settings" -> ui.route = Route.SETTINGS
-            }
-        }
+        applyRouteFromIntent(intent)
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startCamera()
         else askCamera.launch(Manifest.permission.CAMERA)
 
         card.exportPrints()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        applyRouteFromIntent(intent)
+    }
+
+    private fun applyRouteFromIntent(i: Intent?) {
+        when (i?.getStringExtra("route")) {
+            "shelf" -> ui.route = Route.SHELF
+            "roll" -> ui.route = Route.ROLL
+            "darkroom" -> ui.route = Route.DARKROOM
+            "prints" -> { ui.printsRoll = -1; ui.route = Route.PRINTS }
+            "settings" -> ui.route = Route.SETTINGS
+        }
     }
 
     private fun immersive() {
@@ -795,6 +849,13 @@ class MainActivity : ComponentActivity() {
         } else {
             b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
         }
+        val awb = when (ui.wbMode) {
+            1 -> CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT
+            2 -> CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT
+            3 -> CaptureRequest.CONTROL_AWB_MODE_SHADE
+            else -> CaptureRequest.CONTROL_AWB_MODE_AUTO
+        }
+        b.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awb)
         ctrl.setCaptureRequestOptions(b.build())
     }
 
@@ -859,7 +920,14 @@ class MainActivity : ComponentActivity() {
         } catch (_: Throwable) { }
     }
 
-    private fun importGalleryRoll(uris: List<Uri>, filmIdx: Int, size: Int, pushStops: Int) {
+    private fun importGalleryRoll(
+        uris: List<Uri>,
+        filmIdx: Int,
+        size: Int,
+        pushStops: Int,
+        grainPct: Int,
+        halPct: Int,
+    ) {
         importing = true
         captureExecutor.execute {
             try {
@@ -870,7 +938,7 @@ class MainActivity : ComponentActivity() {
                     runOnUiThread {
                         importing = false
                         if (ok > 0) {
-                            DevelopService.start(this, rollNo, size, pushStops, 0)
+                            DevelopService.start(this, rollNo, size, pushStops, 0, grainPct, halPct)
                         } else {
                             Toast.makeText(this, "Could not decode selected photos", Toast.LENGTH_SHORT).show()
                         }
@@ -894,6 +962,7 @@ class MainActivity : ComponentActivity() {
     /** the film OS asked for frame `number`: take it and keep it */
     private fun capture(number: Int) {
         recordShotGps(number)
+        if (!ui.halfFrame && ui.aspectFormat != 0) card.recordFormat(number, ui.aspectFormat)
         val dbl = pendingDoubleBlend
         if (dbl != null) {
             pendingDoubleBlend = null
@@ -1128,6 +1197,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val histSampler: Runnable = object : Runnable {
+        override fun run() {
+            if (!running) return
+            if (ui.showHistogram && !ui.cleanFinder && ui.route == Route.CAMERA) {
+                val bmp = preview.bitmap
+                if (bmp != null) {
+                    histExecutor.execute {
+                        try {
+                            val sw = 64
+                            val sh = 48
+                            val small = Bitmap.createScaledBitmap(bmp, sw, sh, false)
+                            bmp.recycle()
+                            val px = IntArray(sw * sh)
+                            small.getPixels(px, 0, sw, 0, 0, sw, sh)
+                            small.recycle()
+                            val bins = IntArray(32)
+                            var clipped = 0
+                            for (c in px) {
+                                val r = (c shr 16) and 0xFF
+                                val g = (c shr 8) and 0xFF
+                                val bl = c and 0xFF
+                                val l = (r * 54 + g * 183 + bl * 19) shr 8
+                                bins[(l shr 3).coerceIn(0, 31)]++
+                                if (l >= 248) clipped++
+                            }
+                            val maxBin = bins.maxOrNull()?.coerceAtLeast(1) ?: 1
+                            val norm = FloatArray(32) { i -> bins[i].toFloat() / maxBin }
+                            val isClip = clipped > (px.size * 3 / 100)
+                            runOnUiThread {
+                                ui.histogram = norm
+                                ui.highlightClipped = isClip
+                            }
+                        } catch (_: Throwable) {
+                            runCatching { bmp.recycle() }
+                        }
+                    }
+                }
+            }
+            mainHandler.postDelayed(this, 250L)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (!Native.started()) return
@@ -1138,6 +1249,7 @@ class MainActivity : ComponentActivity() {
         }
         updateLabel()
         Choreographer.getInstance().postFrameCallback(tick)
+        mainHandler.postDelayed(histSampler, 400L)
         @Suppress("DEPRECATION")
         held = windowManager.defaultDisplay.rotation
         if (holding.canDetectOrientation()) holding.enable()
@@ -1146,6 +1258,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         cancelTimer()
+        mainHandler.removeCallbacks(histSampler)
         holding.disable()
         sensorManager?.unregisterListener(tiltListener)
         if (running) {
@@ -1160,6 +1273,7 @@ class MainActivity : ComponentActivity() {
         doubleFirst?.recycle()
         halfFirst?.recycle()
         pendingDoubleBlend?.recycle()
+        histExecutor.shutdownNow()
         soundPool?.release()
         soundPool = null
     }
