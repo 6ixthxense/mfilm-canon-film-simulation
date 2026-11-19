@@ -66,7 +66,7 @@ jobs:
             -lpthread -lm -o /tmp/smoke
           mkdir -p /tmp/card/DCIM/100CANON /tmp/out
           /tmp/smoke "$PWD/android/app/src/main/assets" /tmp/card/ /tmp/out l0 s n w100
-          test -f /tmp/card/DCIM/100CANON/IMG_0001.CR2
+          test -f /tmp/card/DCIM/100CANON/IMG_0101.CR2
 
       - name: Build the APK
         working-directory: android
