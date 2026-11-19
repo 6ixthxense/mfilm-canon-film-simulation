@@ -40,6 +40,34 @@ jobs:
           python -m pip install -q numpy scipy pillow
           bash android/scripts/build_assets.sh
 
+      - name: C smoke test
+        run: |
+          gcc -c -std=gnu99 -O2 -DFOS_DEV_RAWIN -DMFILM_VERSION=\"ci\" \
+            -Dfos_port_model=sim_port_model -Iml-dev/filmos \
+            ml-dev/filmos/sim/port_files.c -o /tmp/port_files.o
+          gcc -std=gnu99 -O2 -DFOS_DEV_RAWIN -DMFILM_VERSION=\"ci\" \
+            -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare \
+            -Wno-unused-variable -Wno-unused-but-set-variable \
+            -Iml-dev/filmos \
+            android/test/smoke.c \
+            android/app/src/main/cpp/mfilm_port.c \
+            android/app/src/main/cpp/mkcr2_lib.c \
+            /tmp/port_files.o \
+            ml-dev/filmos/sim/fonts.c \
+            ml-dev/filmos/sim/films.c \
+            ml-dev/filmos/fos_gfx.c \
+            ml-dev/filmos/fos_film.c \
+            ml-dev/filmos/fos_print.c \
+            ml-dev/filmos/fos_dev.c \
+            ml-dev/filmos/fos_dng.c \
+            ml-dev/filmos/fos_lab.c \
+            ml-dev/filmos/fos_looks.c \
+            ml-dev/filmos/fos_jpeg.c \
+            -lpthread -lm -o /tmp/smoke
+          mkdir -p /tmp/card/DCIM/100CANON /tmp/out
+          /tmp/smoke android/app/src/main/assets /tmp/card/ /tmp/out l0 s n w100
+          test -f /tmp/card/DCIM/100CANON/IMG_0001.CR2
+
       - name: Build the APK
         working-directory: android
         run: gradle --no-daemon assembleRelease

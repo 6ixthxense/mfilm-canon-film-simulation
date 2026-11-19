@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,6 +61,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
 
@@ -171,7 +174,10 @@ fun DarkroomScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
-                Label("DEVELOPING ROLL %03d".format(DevelopState.rollNo), size = 14.sp, color = SAFELIGHT)
+                val q = DevelopState.queuedCount
+                val heading = if (q > 0) "DEVELOPING ROLL %03d  ·  +%d QUEUED".format(DevelopState.rollNo, q)
+                else "DEVELOPING ROLL %03d".format(DevelopState.rollNo)
+                Label(heading, size = 14.sp, color = SAFELIGHT)
 
                 Box(
                     Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp),
@@ -415,7 +421,13 @@ fun PrintsScreen(initialRoll: Int, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 itemsIndexed(prints, key = { _, p -> p.no }) { idx, item ->
-                    val thumb = remember(item.jpegPath) { decodeThumb(item.jpegPath, 360) }
+                    val cacheKey = "thumb:${item.jpegPath}"
+                    val thumb by produceState<Bitmap?>(initialValue = BitmapCache.get(cacheKey), key1 = item.jpegPath) {
+                        if (value != null) return@produceState
+                        value = withContext(Dispatchers.IO) {
+                            decodeThumb(item.jpegPath, 360)?.also { BitmapCache.put(cacheKey, it) }
+                        }
+                    }
                     Column(
                         Modifier.clickable {
                             view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -425,7 +437,7 @@ fun PrintsScreen(initialRoll: Int, onBack: () -> Unit) {
                     ) {
                         if (thumb != null) {
                             Image(
-                                thumb.asImageBitmap(),
+                                thumb!!.asImageBitmap(),
                                 contentDescription = "Frame ${item.no}",
                                 modifier = Modifier.fillMaxWidth().aspectRatio(3f / 2).border(0.5.dp, Look.Plate),
                                 contentScale = ContentScale.Crop,
@@ -452,12 +464,20 @@ private fun Lightbox(
     onClose: () -> Unit,
 ) {
     val item = prints[index]
-    val dims = remember(item.jpegPath) {
-        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(item.jpegPath, o)
-        "${o.outWidth}×${o.outHeight}"
+    val dims by produceState(initialValue = "", key1 = item.jpegPath) {
+        value = withContext(Dispatchers.IO) {
+            val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(item.jpegPath, o)
+            if (o.outWidth > 0 && o.outHeight > 0) "${o.outWidth}×${o.outHeight}" else ""
+        }
     }
-    val bmp = remember(item.jpegPath) { decodeThumb(item.jpegPath, 1920) }
+    val fullKey = "full:${item.jpegPath}"
+    val bmp by produceState<Bitmap?>(initialValue = BitmapCache.get(fullKey), key1 = item.jpegPath) {
+        if (value != null) return@produceState
+        value = withContext(Dispatchers.IO) {
+            decodeThumb(item.jpegPath, 1920)?.also { BitmapCache.put(fullKey, it) }
+        }
+    }
     var scale by remember(index) { mutableFloatStateOf(1f) }
     var pan by remember(index) { mutableStateOf(Offset.Zero) }
     var showInfo by remember { mutableStateOf(true) }
@@ -502,7 +522,7 @@ private fun Lightbox(
         ) {
             if (bmp != null) {
                 Image(
-                    bmp.asImageBitmap(),
+                    bmp!!.asImageBitmap(),
                     contentDescription = "Frame ${item.no}",
                     modifier = Modifier.fillMaxSize().graphicsLayer(
                         scaleX = scale,
@@ -626,6 +646,7 @@ private fun shareJpeg(context: Context, path: String) {
 fun SettingsScreen(
     ui: Ui,
     onToggleShooting: () -> Unit,
+    onTogglePrintSize: () -> Unit,
     onToggleWind: () -> Unit,
     onToggleFinder: () -> Unit,
     onToggleFramelines: () -> Unit,
@@ -646,6 +667,15 @@ fun SettingsScreen(
         Spacer(Modifier.height(18.dp))
 
         SettingRow("SHOOTING", if (ui.singleShot) "SINGLE (AUTO-DEV)" else "ROLL (12/24/36)", onToggleShooting)
+        SettingRow(
+            "PRINT SIZE (SINGLE)",
+            when (ui.defaultPrintSize) {
+                0 -> "S (720×480)"
+                1 -> "M (1440×960)"
+                else -> "L (FULL)"
+            },
+            onTogglePrintSize,
+        )
         SettingRow("FILM ADVANCE", if (ui.realisticWind) "REALISTIC (WIND ON)" else "AUTO", onToggleWind)
         SettingRow("VIEWFINDER", if (ui.cleanFinder) "CLEAN" else "INFO", onToggleFinder)
         SettingRow("FRAMELINES", if (ui.framelines) "ON" else "OFF", onToggleFramelines)

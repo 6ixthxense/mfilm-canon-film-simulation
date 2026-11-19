@@ -156,6 +156,10 @@ class Ui {
     var dateStamp by mutableStateOf(false)
     var framelines by mutableStateOf(true)
     var printsRoll by mutableIntStateOf(-1)
+    var defaultPrintSize by mutableIntStateOf(1)    // 0=S, 1=M, 2=L (for SINGLE mode)
+    var flashMode by mutableIntStateOf(0)           // 0=OFF, 1=AUTO, 2=ON
+    var frontCamera by mutableStateOf(false)
+    var shutterFlash by mutableStateOf(false)
 }
 
 /** What the controls do. */
@@ -177,6 +181,8 @@ class Actions(
     val toggleMf: () -> Unit,
     val setMfDistance: (Float) -> Unit,
     val setLoupe: (Boolean) -> Unit,
+    val toggleFlash: () -> Unit,
+    val toggleCamera: () -> Unit,
 )
 
 // ---------------------------------------------------------------- the controls
@@ -214,6 +220,40 @@ fun DarkroomKey(pending: Int, modifier: Modifier = Modifier, onClick: () -> Unit
             Canvas(Modifier.padding(end = 6.dp).size(6.dp)) { drawCircle(Look.Amber) }
         }
         Label("Darkroom", color = if (pressed) Look.Amber else Look.Ivory)
+    }
+}
+
+/** Prints door: shows a blinking amber indicator while DevelopService is actively developing. */
+@Composable
+fun PrintsKey(developing: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val view = LocalView.current
+    var blink by remember { mutableStateOf(true) }
+    LaunchedEffect(developing) {
+        if (!developing) {
+            blink = false
+            return@LaunchedEffect
+        }
+        while (true) {
+            blink = !blink
+            delay(450)
+        }
+    }
+    Row(
+        modifier.defaultMinSize(56.dp, 48.dp).clickable(source, indication = null, role = Role.Button) {
+            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            onClick()
+        },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        if (developing) {
+            Canvas(Modifier.padding(end = 6.dp).size(6.dp)) {
+                drawCircle(if (blink) Look.Amber else Look.Amber.copy(alpha = 0.25f))
+            }
+        }
+        Label("Prints", color = if (pressed) Look.Amber else Look.Ivory)
     }
 }
 
@@ -659,6 +699,13 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
         LaunchedEffect(ui.focus, ui.focusLocked) {
             if (ui.focus != null && !ui.focusLocked) { delay(1200); ui.focus = null }
         }
+        if (ui.shutterFlash) {
+            Box(Modifier.fillMaxSize().background(Color.Black))
+            LaunchedEffect(Unit) {
+                delay(110)
+                ui.shutterFlash = false
+            }
+        }
     }
 }
 
@@ -684,13 +731,18 @@ private fun Level(ui: Ui, preview: View, on: Actions) {
                 if (ui.lenses.size > 1) LensRing(ui, onZoom = on.zoom)
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (ui.mfSupported) {
-                        Key(if (ui.mfEnabled) "MF" else "AF", color = if (ui.mfEnabled) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(36.dp, 40.dp), onClick = on.toggleMf)
+                        Key(if (ui.mfEnabled) "MF" else "AF", color = if (ui.mfEnabled) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(32.dp, 38.dp), onClick = on.toggleMf)
                     }
-                    Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TMR", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(36.dp, 40.dp), onClick = on.toggleTimer)
-                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(32.dp, 40.dp), onClick = on.toggleDoubleExp)
+                    Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TMR", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(32.dp, 38.dp), onClick = on.toggleTimer)
+                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(28.dp, 38.dp), onClick = on.toggleDoubleExp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val flsLabel = when (ui.flashMode) { 1 -> "FL:A"; 2 -> "FL:1"; else -> "FLS" }
+                    Key(flsLabel, color = if (ui.flashMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(40.dp, 38.dp), onClick = on.toggleFlash)
+                    Key(if (ui.frontCamera) "FRT" else "CAM", color = if (ui.frontCamera) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(40.dp, 38.dp), onClick = on.toggleCamera)
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Key("Prints", onClick = on.prints)
+                    PrintsKey(DevelopState.running, onClick = on.prints)
                     DarkroomKey(ui.pendingRolls, onClick = on.darkroom)
                     Key("Manual", color = Look.Dim, onClick = on.settings)
                 }
@@ -757,17 +809,22 @@ private fun Upright(ui: Ui, preview: View, on: Actions) {
         }
         if (!ui.cleanFinder) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 4.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (ui.lenses.size > 1) LensRing(ui, onZoom = on.zoom) else Spacer(Modifier.width(1.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (ui.lenses.size > 1) LensRing(ui, onZoom = on.zoom)
+                    val flsLabel = when (ui.flashMode) { 1 -> "FL:A"; 2 -> "FL:1"; else -> "FLS" }
+                    Key(flsLabel, color = if (ui.flashMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(38.dp, 40.dp), onClick = on.toggleFlash)
+                    Key(if (ui.frontCamera) "FRT" else "CAM", color = if (ui.frontCamera) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(38.dp, 40.dp), onClick = on.toggleCamera)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (ui.mfSupported) {
-                        Key(if (ui.mfEnabled) "MF" else "AF", color = if (ui.mfEnabled) Look.Amber else Look.Dim, onClick = on.toggleMf)
+                        Key(if (ui.mfEnabled) "MF" else "AF", color = if (ui.mfEnabled) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(36.dp, 40.dp), onClick = on.toggleMf)
                     }
-                    Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TIMER", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, onClick = on.toggleTimer)
-                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, onClick = on.toggleDoubleExp)
+                    Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TMR", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(36.dp, 40.dp), onClick = on.toggleTimer)
+                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(34.dp, 40.dp), onClick = on.toggleDoubleExp)
                 }
             }
             if (ui.mfEnabled) {
@@ -787,7 +844,7 @@ private fun Upright(ui: Ui, preview: View, on: Actions) {
             Column(Modifier.width(100.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (ui.needWind) WindLever(onWind = on.wind)
                 if (!ui.cleanFinder) {
-                    Key("Prints", onClick = on.prints)
+                    PrintsKey(DevelopState.running, onClick = on.prints)
                     DarkroomKey(ui.pendingRolls, onClick = on.darkroom)
                 }
             }
