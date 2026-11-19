@@ -1,67 +1,62 @@
 # M-Film for Android
 
-M-Film's film OS on a phone: the same C that runs on the Canon (`ml-dev/filmos/`), built with the
-NDK, with the phone's camera as LiveView. Load a roll from the shelf of 68 films, shoot it without
-seeing the pictures, then develop it in the darkroom; the prints go to the gallery
-(`Pictures/M-Film/<day> <film>/`).
+Native Android film camera and darkroom powered by **M-Film's C engine** (`ml-dev/filmos/`), originally created by **[HNGSeries](https://github.com/HNGSeries/mfilm-canon-film-simulation)** for Canon Magic Lantern cameras.
 
-> ภาษาไทยสั้นๆ: พอร์ต Film OS ของ M-Film (โค้ด C ชุดเดียวกับที่รันบนกล้อง) มาเป็นแอป Android แบบ native
-> ใช้กล้องมือถือแทน LiveView ถ่ายเป็น RAW (CR2 แบบ EOS M) แล้วล้างในห้องมืดด้วยตารางสีของฟิล์ม
-> รูปที่ล้างแล้วไปอยู่ใน Pictures/M-Film ปุ่มเสียงคือชัตเตอร์ ลากนิ้วบนจอ = หมุน dial
+Built with **Jetpack Compose**, **CameraX + Camera2 Interop**, and a **multi-threaded `-O3` C NDK darkroom** (`pthreads`) — zero bloated dependencies, 100% offline processing.
 
-## How it works
+> **Upstream Credit:** Forked from **[HNGSeries/mfilm-canon-film-simulation](https://github.com/HNGSeries/mfilm-canon-film-simulation)**. The Film OS state model, 68 film definitions, and C RAW/DNG/JPEG developing pipeline originate from **HNGSeries**.
 
-| Part | File |
-|---|---|
-| The port: every `fos_port_*` the film OS needs, its loop on a thread of its own, the roll kept on the card | `app/src/main/cpp/mfilm_port.c` (from `ml-dev/filmos/web/web.c`) |
-| The shutter: the sensor's RAW as a DNG; without RAW, the photo into an 18 MP CR2 shaped like the EOS M's | `MainActivity.kt`; `app/src/main/cpp/mkcr2_lib.c` (includes `ml-dev/filmos/sim/tools/mkcr2.c`) |
-| Developing a DNG | `ml-dev/filmos/fos_dng.c`, `fos_dev_start_raw` in `fos_dev.c` (`FOS_DEV_RAWIN`) |
-| JNI | `app/src/main/cpp/jni_bridge.c` → `Native.kt` |
-| Camera (CameraX), keys, the screen over LiveView | `MainActivity.kt`, `Views.kt` |
-| The card, the CR2 queue, the gallery | `Card.kt` |
-| The card's data (fonts, films, colour tables) | `scripts/build_assets.sh` → `app/src/main/assets/` |
+---
 
-The card is `Android/data/io.github.sixthxense.mfilm/files/card/`, laid out as a camera's
-(`DCIM/100CANON/IMG_nnnn.CR2`, `ROLL_nnn.TXT`, `ML/DARKROOM/LOOKnn.LUT`), so its RAWs also open in
-Darkrooms or any raw converter. A frame's CR2 is written in the background (a few seconds each); the
-darkroom waits until every one is on the card.
+## Architecture
 
-The shutter takes the sensor's own RAW where the phone gives it (CameraX `OUTPUT_FORMAT_RAW`): a DNG,
-`DCIM/100CANON/IMG_nnnn.DNG`, which the darkroom develops with the phone's colour matrix and with the
-lens's fall-off taken out (`ml-dev/filmos/fos_dng.c`). A phone without RAW gets a CR2 made from its photo,
-as before.
-
-Controls: the round button or a volume key is the shutter (press = half-press, release = shoot);
-MENU, INFO, PLAY, the arrows and SET as on the camera. And the screen is a touch screen:
-
-| | Film OS up | LiveView |
+| Component | Location | Responsibility |
 |---|---|---|
-| tap | SET | focus and meter there |
-| drag across | ◀ ▶ | the dial (aperture) |
-| drag up / down | ▲ ▼ | exposure compensation |
-| two fingers | MENU (back) | Home |
+| **C Port & Mutex State** | `app/src/main/cpp/mfilm_port.c`, `mfilm_port.h` | Thread-safe (`pthread_mutex_t`) bridge for roll state, darkroom session, gallery roll import, film swapping, and custom grain/halation recipes |
+| **Multi-Threaded Darkroom** | `ml-dev/filmos/fos_dev.c`, `fos_dng.c`, `fos_lab.c`, `fos_jpeg.c` | Compiled with `-O3 -DFOS_DEV_RAWIN -DFOS_MULTITHREAD` (4-thread persistent `pthreads` pool for `ST_FINISH` and `big_rows`) |
+| **CR2 Generator** | `app/src/main/cpp/mkcr2_lib.c` | Encodes non-RAW / composite (2X, Half-Frame, Imported) bitmaps into 18 MP EOS-M-shaped CR2s |
+| **JNI Bridge** | `app/src/main/cpp/jni_bridge.c` → `Native.kt` | Native bindings for roll management, canister rendering, darkroom stepping, and CR2 encoding |
+| **Camera Controller** | `MainActivity.kt` | CameraX/Camera2 lifecycle, RAW DNG & JPEG capture, Manual Exposure (`M`), Manual Focus, WB Lock, Live Histogram, Horizon Spirit Level, Live Film Look `ColorMatrix`, Double Exposure (`2X`), Half-Frame (`½`), GPS tagging, `SoundPool` WAV audio |
+| **Viewfinder & Mechanical UI** | `Ui.kt` | Pure matte-black / brass / amber Jetpack Compose HUD (`Level` & `Upright`), 7-segment counter, EV/Manual/Focus dials, framelines, 6×6 & XPan crop masks, spirit level, histogram |
+| **Film Shelf & Roll Log** | `Screens.kt` | `HorizontalPager` canister shelf, ★ Favorites tab, async `LruCache` sample & canister rendering, frame exposure log & rewind |
+| **Darkroom, Prints & Settings** | `LabScreens.kt` | Safelight Darkroom, Gallery Import picker, Re-develop + Film Swap, Grain/Halation recipe steppers, Roll Labels, Contact Sheet & Lightbox (`35MM` film rebate preview/share), Roll ZIP export, Settings manual |
+| **Virtual Card & EXIF** | `Card.kt` | `Android/data/.../files/card/` layout, background CR2 queue, 6×6/XPan cropping, Light Leak & Dust/Scratch effects, 35mm rebate renderer, `ExifInterface` (Date/FNumber/Film/Memo/GPS), MediaStore export, RAW storage cleaner |
+| **Background Lab Queue** | `DevelopService.kt` | Foreground service with `ConcurrentLinkedQueue<DevJob>`, live safelight preview, post-processing, MediaStore export, and optional Auto-Clean RAW |
+| **Android System Integration** | `MFilmWidget.kt`, `MFilmTileService.kt`, `res/xml/shortcuts.xml` | Home Screen Widget, Quick Settings Tile, and App Shortcuts (`Shelf` / `Darkroom` / `Prints`) |
+| **Asset Pipeline** | `scripts/build_assets.sh` → `app/src/main/assets/` | Builds `FOSFONT.BIN`, `FOSFILMS.BIN`, 68 LUT tables (`tables/`), and shelf sample photos (`samples/`) |
 
-Back closes the film OS's screens.
+---
 
-Held upright, the app turns with the phone (`res/layout-port/`): the keys go under the screen, and on
-LiveView the frame is 2:3, the portrait picture, with a viewfinder of its own (the film, the frame
-count); the film OS's screens stay 3:2 above the keys. The gestures follow the screen as it is held.
-Each frame's RAW is marked with how the phone was held, so the darkroom turns its print upright.
+## Build & Test
 
-## Build
+### Prerequisites
+- Android SDK (API 35) + NDK + CMake `3.22.1`
+- JDK 17 & Gradle `8.11.1`
+- Python 3 with `numpy`, `scipy`, `pillow`
 
-GitHub Actions (`.github/workflows/android.yml`) builds the APK on every push that touches it, and on
-`main` publishes it as the `android-latest` release.
-
-On a computer: Android Studio (or the SDK with NDK and CMake 3.22.1), Gradle 8.11, Python 3 with numpy:
-
+### Local Build
 ```bash
-android/scripts/build_assets.sh       # once, and when the films change (fetches the Film-Luts LUTs once)
-cd android && gradle assembleRelease  # app/build/outputs/apk/release/app-release.apk
+# Generate fonts, LUT tables, and shelf sample JPEGs (once, or when films change)
+bash android/scripts/build_assets.sh
+
+# Build release APK
+cd android
+gradle assembleRelease
+# -> android/app/build/outputs/apk/release/app-release.apk
 ```
 
-## Licences
+### CI Pipeline (`.github/workflows/android.yml`)
+On every push to `main`:
+1. Generates card assets (`android/scripts/build_assets.sh`).
+2. Compiles and runs the **C Smoke Test** (`android/test/smoke.c`) with `-O3 -DFOS_DEV_RAWIN -DFOS_MULTITHREAD` to verify roll loading, shooting, winding, and CR2 generation (`IMG_0101.CR2`).
+3. Builds the signed release APK (`gradle --no-daemon assembleRelease`).
+4. Publishes the APK to the **`android-latest`** GitHub Release.
 
-GPL-2.0 like the rest of M-Film. The colour tables of 59 films are Pat David's, CC BY-SA 4.0
-(`THIRD_PARTY.md`); they are in the APK and on the card as `ML/THIRD_PARTY.txt`. Not affiliated with
-Canon, Kodak, Fujifilm or others. Darkrooms, the desktop program, is closed source and not part of this.
+---
+
+## Credits & Licenses
+
+- **Upstream Project**: **[HNGSeries/mfilm-canon-film-simulation](https://github.com/HNGSeries/mfilm-canon-film-simulation)** (`GPL-2.0`).
+- **59 Film Colour Tables**: **Pat David** ([patdavid.net](https://patdavid.net)) via [Film-Luts](https://github.com/YahiaAngelo/Film-Luts) — licensed under **CC BY-SA 4.0** (see `../THIRD_PARTY.md`, also bundled in the APK).
+- **Barlow Font**: SIL Open Font License 1.1.
+- Not affiliated with Canon, Kodak, Fujifilm, CineStill, Ilford, Hasselblad, Olympus, or any film/camera brand.
