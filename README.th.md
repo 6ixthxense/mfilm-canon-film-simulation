@@ -2,342 +2,134 @@
 
 <img src="docs/images/mfilm.png" width="112" alt="M-Film">
 
-# M-Film
+# M-Film (Android Native Fork)
 
-**เปลี่ยนกล้อง Canon ของคุณให้ถ่ายเหมือนกล้องฟิล์ม**
+**กล้องฟิล์ม 35mm และห้องมืดล้างฟิล์มบน Android — ขับเคลื่อนด้วยเอนจิน C แท้จาก M-Film**
 
-หน้าจอแบบกล้องฟิล์มสำหรับกล้อง Canon ที่ลง Magic Lantern ได้<br>
-เลือกม้วนจากชั้นวางฟิล์ม 68 แบบ ถ่ายโดยไม่เห็นภาพบนจอ แล้วล้างฟิล์มทั้งม้วน ในกล้องเองหรือบนคอมด้วย **Darkrooms**<br>
-ส่วนในกล้องใช้ฟรีและเปิดซอร์สสำหรับทุกคน
+> **เครดิตต้นฉบับ (Fork Attribution):** โปรเจกต์นี้ Fork มาจาก **[HNGSeries/mfilm-canon-film-simulation](https://github.com/HNGSeries/mfilm-canon-film-simulation)** โดย **[HNGSeries](https://github.com/HNGSeries)**
+> แนวคิด Film OS, สูตรฟิล์มทั้ง 68 ตัว และเอนจินห้องมืดภาษา C (`ml-dev/filmos/`) ทั้งหมดเป็นผลงานของต้นฉบับ Fork นี้นำเอนจิน C ชุดเดียวกันมาพัฒนาต่อยอดเป็นแอปกล้องฟิล์ม **Android แบบ Native** (`android/`) เต็มรูปแบบ
 
-[![ดาวน์โหลด](https://img.shields.io/badge/%E0%B8%94%E0%B8%B2%E0%B8%A7%E0%B8%99%E0%B9%8C%E0%B9%82%E0%B8%AB%E0%B8%A5%E0%B8%94-eca834?style=for-the-badge)](../../releases/latest)
-[![เลี้ยงกาแฟผู้พัฒนา](https://img.shields.io/badge/%E0%B9%80%E0%B8%A5%E0%B8%B5%E0%B9%89%E0%B8%A2%E0%B8%87%E0%B8%81%E0%B8%B2%E0%B9%81%E0%B8%9F%E0%B8%9C%E0%B8%B9%E0%B9%89%E0%B8%9E%E0%B8%B1%E0%B8%92%E0%B8%99%E0%B8%B2-ffdd00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buy.stripe.com/7sY14p8d93QE5Ny5M58so02)
+[![ดาวน์โหลด APK (Android)](https://img.shields.io/badge/%E0%B8%94%E0%B8%B2%E0%B8%A7%E0%B8%99%E0%B9%8C%E0%B9%82%E0%B8%AB%E0%B8%A5%E0%B8%94%20APK%20(Android)-eca834?style=for-the-badge&logo=android&logoColor=black)](https://github.com/6ixthxense/mfilm-canon-film-simulation/releases/tag/android-latest)
+[![ต้นฉบับ HNGSeries/M-Film](https://img.shields.io/badge/Upstream-HNGSeries%2FM--Film-3b352f?style=for-the-badge&logo=github)](https://github.com/HNGSeries/mfilm-canon-film-simulation)
 
 [![License GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-3b352f)](LICENSE)
-[![Cameras](https://img.shields.io/badge/cameras-10%20work%20%C2%B7%205%20with%20a%20problem%20%C2%B7%201%20in%20testing-3b352f)](#กล้องที่รองรับ)
-[![Films](https://img.shields.io/badge/films-68-3b352f)](FILMS.md)
+[![Films](https://img.shields.io/badge/films-68%20stocks-3b352f)](FILMS.md)
+[![Android CI](https://github.com/6ixthxense/mfilm-canon-film-simulation/actions/workflows/android.yml/badge.svg)](https://github.com/6ixthxense/mfilm-canon-film-simulation/actions/workflows/android.yml)
 
-[English](README.md) · **ภาษาไทย** · [ฟิล์ม](#ฟิล์ม-68-แบบ) · [กล้องที่รองรับ](#กล้องที่รองรับ) · [Darkrooms](#ล้างบนคอม-darkrooms) · [คู่มือในกล้อง](docs/MANUAL.th.md) · [ทำต่อยอด](PORTING.md)
-
-<br>
-
-<img src="ml-dev/filmos/preview/shelf.gif" alt="ชั้นวางฟิล์มในกล้อง" width="720">
+[English](README.md) · **ภาษาไทย** · [คู่มือพัฒนา Android](android/README.md) · [ดูฟิล์มทั้ง 68 ตัว](FILMS.md) · [เครดิตต้นฉบับ](#เครดิตและผู้สร้างต้นฉบับ)
 
 </div>
 
 ---
 
-## กล้องฟิล์ม อยู่ในกล้องของคุณ
+## เกี่ยวกับ Fork นี้
 
-M-Film เปลี่ยนเมนูของกล้องเป็นหน้าจอกล้องฟิล์มที่วาดขึ้นใหม่ทั้งหมด โดยมี Magic Lantern ทำงานอยู่ข้างใต้
-ถ่ายแล้วไม่มีภาพขึ้นบนจอ และย้อนดูรูปไม่ได้ ถ่ายให้ครบม้วนก่อน แล้วล้างฟิล์มถึงจะได้เห็นว่าได้รูปอะไรมาบ้าง
+**[M-Film](https://github.com/HNGSeries/mfilm-canon-film-simulation)** ของ **HNGSeries** คือระบบกล้องฟิล์มสำหรับกล้อง Canon ที่ลง Magic Lantern ให้คุณเลือกม้วนจากชั้นวาง 68 ฟิล์ม ถ่ายโดยไม่ดูรูปหลังจอ แล้วนำมาล้างในห้องมืดของกล้อง
 
-<table>
-<tr>
-<td width="50%"><img src="ml-dev/filmos/preview/shelf.png" alt="ชั้นวางฟิล์ม"></td>
-<td width="50%"><img src="ml-dev/filmos/preview/roll.png" alt="ม้วนฟิล์ม"></td>
-</tr>
-<tr>
-<td><b>ใส่ฟิล์ม</b> ชั้นวางกลักฟิล์มที่หมุนหันเข้าหาคุณ เลือกม้วนแล้วหางฟิล์มจะถูกดึงออกมาจากกลัก</td>
-<td><b>นับรูป</b> หน้าปัดนับรูปแบบกล้องฟิล์ม ตั้งแต่ S จนถึงรูปสุดท้ายของม้วน</td>
-</tr>
-<tr>
-<td><img src="ml-dev/filmos/preview/hud.png" alt="HUD ตอนถ่าย"></td>
-<td><img src="ml-dev/filmos/preview/developing.png" alt="ล้างฟิล์มในกล้อง"></td>
-</tr>
-<tr>
-<td><b>ถ่าย</b> แบบช่องมองของกล้อง SLR ทับภาพ LiveView: สเกลรูรับแสง เข็มวัดแสง และตัวเลขนับรูปสีแดงแบบ 7 ส่วน</td>
-<td><b>ล้างฟิล์มในกล้อง</b> ห้องมืดล้างม้วนที่ถ่ายครบทีละรูป ออกมาเป็นโฟลเดอร์ JPEG บนการ์ด</td>
-</tr>
-<tr>
-<td><img src="ml-dev/filmos/preview/prints-sheet.png" alt="Contact sheet"></td>
-<td><img src="ml-dev/filmos/preview/home.png" alt="Home"></td>
-</tr>
-<tr>
-<td><b>ดูรูปที่ล้างแล้ว</b> contact sheet ของทั้งม้วน และดูทีละรูปเต็มจอ</td>
-<td><b>Home</b> แทนเมนูของกล้อง: ม้วนที่ใส่อยู่ และทางไปหน้าอื่นๆ</td>
-</tr>
-</table>
+Fork นี้คอมไพล์ **เอนจินห้องมืดภาษา C ชุดเดียวกัน** (`fos_dev.c`, `fos_dng.c`, `fos_lab.c`, `fos_looks.c`) ผ่าน Android NDK พร้อมเร่งความเร็วแบบ **Multi-thread (`pthreads` + `-O3`)** และออกแบบอินเทอร์เฟซใหม่ทั้งหมดด้วย **Jetpack Compose + CameraX / Camera2** ในสไตล์กล้องฟิล์มกลไก (ดำด้าน, ทองเหลือง, แสงอำพัน และเลขนับเฟรม LED 7-segment สีแดง)
 
-ไฟล์ RAW ยังเก็บไว้ครบทุกรูป ไม่มีอะไรหาย จะเอาม้วนเดิมไปล้างใหม่ด้วยฟิล์มอื่นทีหลังก็ได้
-
-**โฟกัสเลนส์แมนนวล** ใส่ฟิล์มแล้วกล้องจะตั้ง ISO ตามฟิล์ม และ LiveView จะแสดงแสงตามที่รูปจะได้จริง
-ถ้าฟิล์มช้า หรือหรี่รูรับแสงของเลนส์แปลงไว้ ภาพอาจมืดจนโฟกัสไม่ได้ ปิด *Settings → Exposure simulation*
-แล้ว LiveView จะสว่างพอให้โฟกัสได้ ไม่ว่าค่าแสงจะเป็นเท่าไร (ไม่มีใน 600D, 1100D และ 1300D เพราะ Magic Lantern ตั้งค่านี้ไม่ได้)
-
-### ใหม่ใน 0.2
-
-**0.2.1** เพิ่ม [Canon EOS 1300D](TESTING.md#canon-eos-1300d) ให้ผู้ทดสอบลอง รุ่นอื่นไม่มีอะไรเปลี่ยน ไม่ต้องอัปเดต
-
-<table>
-<tr>
-<td width="50%"><img src="ml-dev/filmos/preview/develop-size.png" alt="เลือกขนาดรูปก่อนล้าง"></td>
-<td width="50%"><img src="ml-dev/filmos/preview/prints-zoom.png" alt="ซูมเข้าไปในรูปที่ล้างแล้ว"></td>
-</tr>
-<tr>
-<td><b>รูปใหญ่ขึ้น</b> เลือก Small, Medium หรือ Large ก่อนเริ่มล้าง ใหญ่สุด 2592 × 1728 จากกล้อง 18 MP</td>
-<td><b>ซูมได้</b> ตอนดูรูป หมุนวงล้อเพื่อซูมเข้า และกดลูกศรเพื่อเลื่อนดู</td>
-</tr>
-<tr>
-<td><img src="ml-dev/filmos/preview/hud-rangefinder.png" alt="ช่องมองแบบ rangefinder"></td>
-<td><img src="ml-dev/filmos/preview/home.png" alt="Home"></td>
-</tr>
-<tr>
-<td><b>ช่องมอง 4 แบบ</b> Classic (แบบ SLR เดิม), Minimal, Rangefinder และ Clean ที่ <i>Settings → Viewfinder</i></td>
-<td><b>Home สั้นลง</b> สิ่งที่ต้องทำต่อไปอยู่บนสุด ตามด้วย Darkroom และ Settings มีแบตเตอรี่ทุกหน้า</td>
-</tr>
-</table>
-
-- **ขนาดรูปและการซูม:** ดู [รูปที่ล้างได้ใหญ่แค่ไหน](#รูปที่ล้างได้ใหญ่แค่ไหน)
-- **หน้าล้างที่นิ่งขึ้น** ยังมีไฟแดง ถาดน้ำยา และกระดาษเหมือนเดิม แต่วาดจอใหม่เฉพาะตอนรูปเสร็จ
-  CPU ตัวเดียวของกล้องจึงเอาไปล้างรูปแทนการเล่น animation กด INFO เพื่อหรี่จอระหว่างล้าง
-- **White balance ของกล้อง** ห้องมืดล้างแต่ละรูปด้วย white balance ที่กล้องตั้งอยู่ตอนถ่าย การใส่ฟิล์มตั้งให้ตรงกับ
-  แสงที่ฟิล์มนั้นทำมาให้ใช้: 5500 K หรือ 3200 K สำหรับฟิล์มทังสเตน ถ้าเปลี่ยนเอง รูปที่ล้างจะเปลี่ยนตาม
-  รูปกลางวันจะเย็นกว่าเดิม เพราะค่าตายตัวเดิมอุ่นเกินไป
-- **ฟิล์ม 59 ตัวที่สีมาจาก Film-Luts คอนทราสต์จัดขึ้นและเงามืดลง** ตารางสีของมันถูกทำด้วยตาบนรูปถ่ายที่เสร็จแล้ว
-  แต่ห้องมืดป้อนรูปที่แบนกว่า JPEG จากกล้องให้ คือมีคอนทราสต์ราว 88 % ตอนนี้ป้อนโทนของรูปถ่ายที่เสร็จแล้ว
-  (picture style Standard ของ Canon) โดยโทนกลางอยู่ที่เดิม ฟิล์มแปดตัวที่ใช้โมเดลของ M-Film เองไม่เปลี่ยน
-- **ฟิล์มสี่ตัวออกจากชั้นแล้ว:** ฟิล์มพิมพ์ภาพยนตร์ Kodak Vision 2383, 2393 และ Fujifilm Eterna 3510, 3513
-  ตารางสีของมันไม่มี license ระบุ ทำมาสำหรับภาพสแกนฟิล์ม ไม่ใช่ภาพถ่าย และไม่มีใครใส่ฟิล์มพิมพ์ในกล้องถ่ายรูป
-  จึงเทียบกับของจริงไม่ได้ ม้วนที่ถ่ายด้วยฟิล์มพวกนี้ไปแล้วจะแสดงในห้องมืดด้วยชื่อของมัน และไม่ถูกล้างเป็นฟิล์มอื่น
-  ไฟล์ RAW ยังอยู่บนการ์ด ถ้ามีม้วนของฟิล์มพวกนี้อยู่ในกล้องตอนอัปเดต ให้กรอฟิล์มก่อน
-- **Date stamp** (*Settings → Date stamp*): วันที่ถ่ายสีส้มที่มุมรูป แบบกล้องคอมแพคที่มี data back
-- **แบตเตอรี่** ข้างนาฬิกาทุกหน้าและในช่องมอง เป็นเปอร์เซ็นต์บน 60D, 6D, 70D, 5D Mark II และ 5D Mark III
-  (แบตของรุ่นเหล่านี้รายงานค่าได้) รุ่นอื่นเป็นไอคอน 3 ระดับ เพราะ Canon รู้แค่นั้น
-- **ฟิล์มที่ใส่ล่าสุด** มีชั้นของตัวเอง (RECENT) และชั้นวางเปิดที่ชั้นนี้ จะใส่ฟิล์มเดิมอีกม้วนก็กดครั้งเดียว
-- **Settings** เหลือหน้าเดียว (ช่องมอง, exposure simulation, ขนาดรูป, date stamp, โหมดฟิล์ม)
-  ที่เหลืออยู่ใน *Manual lens* และ *Advanced* ส่วน Wind lever ไม่ล็อกชัตเตอร์แล้ว: เตือนอย่างเดียว หรือปิด
-- **เมนูเปลี่ยนหน้าทันที** เข้าและออกจากเมนูไม่มีการเลื่อนซ้าย-ขวาแล้ว เฟดระหว่างชั้นวาง ห้องมืด และ Prints สั้นลง
-  และปิดได้ที่ *Advanced → Page fade*
-- **ตัวเลขสว่างเมื่อหมุนปุ่ม** ไม่ใช่เฉพาะตอนกดชัตเตอร์ครึ่งทาง กล้องที่มีปุ่มหมุนสองตัว (50D, 60D, 70D,
-  5D Mark II, 5D Mark III, 6D) ใช้ปุ่มบนเปลี่ยนชั้นบนชั้นวางฟิล์ม และปุ่มหลังเลือกฟิล์ม
-- **EOS M: *Advanced → Hide Canon's graphics*** ไม่ให้สเกลชดเชยแสงและไอคอนของ Canon ทับช่องมอง
-  (กรอบโฟกัสของ Canon หายไปด้วย จึงปิดไว้จนกว่าจะเปิดเอง)
-- **build เดียว** ตั้งแต่รุ่นนี้ film OS โหลดเป็นโมดูลหลังกล้องเปิดบนทุกรุ่น Magic Lantern จึงใช้หน่วยความจำตอนเปิดเครื่อง
-  เท่ากับตอนไม่มี M-Film ([เหตุผล](ml-dev/MEMORY.md)) สำหรับรุ่นที่เคย build รวมไว้จนถึง 0.1.6
-  (EOS M, 6D, 5D Mark III, 60D, 500D, 50D, 5D Mark II) เรื่องนี้เป็นของใหม่: ดู [กล้องที่รองรับ](#กล้องที่รองรับ)
-
-### รูปที่ล้างได้ใหญ่แค่ไหน
-
-ห้องมืดในกล้องล้างได้ 3 ขนาด เลือกตอนเริ่มล้าง (กด *INFO* ที่หน้า Darkroom กล้องจะถามและจำค่าไว้)
-หรือที่ *Settings → Print size*
-
-| | ภาพแนวนอน จากกล้อง 18 MP | คืออะไร | ซูมในกล้อง |
-|---|---|---|---|
-| **Small** | 720 × 480 (0.35 MP) | เท่าจอกล้อง เร็วที่สุด | ไม่ได้ |
-| **Medium** | 1728 × 1152 (2 MP) | หนึ่งในสามของเซนเซอร์ต่อด้าน | × 2.4 |
-| **Large** | 2592 × 1728 (4.5 MP) | ครึ่งหนึ่งของเซนเซอร์ต่อด้าน | × 1.8 และ × 3.6 |
-| **Darkrooms บนคอม** | เต็มขนาด RAW 5184 × 3456 (18 MP) | ทุกพิกเซล | |
-
-- ภาพแนวตั้งได้ขนาดเดียวกัน หมุนเป็นแนวตั้ง เซนเซอร์รุ่นอื่นได้ตามสัดส่วน: Large เป็น 2736 × 1824 บน 6D และ 2880 × 1920 บน 5D Mark III
-- รูปใหญ่ใช้เวลานานขึ้น: คิดจากปริมาณงาน Medium ราว 2.6 เท่าของ Small และ Large ราว 4.4 เท่า
-  (Small ใช้ราว 15 วินาทีต่อรูปบน EOS M)
-  หน้า Darkroom บอกเวลาก่อนเริ่ม โดยคิดจากรูปที่กล้องเคยล้างที่ขนาดนั้น
-- JPEG ใน `DCIM` มีขนาดตามที่เลือก รูป Medium และ Large มีไฟล์สำหรับซูมเก็บบนการ์ดด้วย (รูปละ 2 MB และ 4.5 MB)
-- ถ้ากล้องมีหน่วยความจำไม่พอสำหรับขนาดที่เลือก กล้องจะล้างขนาดถัดลงมาให้ และบอกบนจอ
-- อยากได้รูปของม้วนเดิมใหญ่ขึ้นทีหลัง: *Delete → Prints only* ที่หน้า Darkroom แล้วล้างใหม่
-  ไฟล์ RAW ยังอยู่บนการ์ดครบ จะเอาไปล้างเต็มขนาดบนคอมด้วย **[Darkrooms](#ล้างบนคอม-darkrooms)** ก็ได้
-
-ทุกหน้าจอและทุกปุ่ม: **[คู่มือในกล้อง](docs/MANUAL.th.md)**
-
-### Basic หรือ Realistic
-
-<table>
-<tr>
-<td width="50%"><img src="ml-dev/filmos/preview/film-mode.png" alt="Film mode ในหน้าตั้งค่า"></td>
-<td width="50%"><img src="ml-dev/filmos/preview/end-of-roll.png" alt="ม้วนที่ถ่ายครบในโหมด Basic"></td>
-</tr>
-<tr>
-<td><b>เลือกความสมจริง</b> <i>Settings → Film mode</i></td>
-<td><b>Basic</b> (ค่าเริ่มต้น) ถ่ายรูปสุดท้ายแล้วม้วนจบเอง ส่งเข้าห้องมืดได้เลย ไม่ต้องกรอฟิล์ม</td>
-</tr>
-</table>
-
-- **Basic:** ถ่ายเสร็จก็ล้างได้เลย ถ้าจะจบกลางม้วน กด *Finish roll* ที่หน้าของม้วน (แถวแรกของ Home)
-- **Realistic:** เหมือนกล้องฟิล์มจริง ต้องกรอฟิล์มกลับก่อนถึงจะล้างได้
-- ทั้งสองโหมดเก็บม้วนบนการ์ดเหมือนกัน Darkrooms จึงอ่านได้ทั้งคู่
-
-### กล้อง DSLR: หน้าจอฝาบนกล้องฟิล์ม
-
-<p align="center"><img src="ml-dev/filmos/preview/plate.png" alt="หน้าจอฝาบนบนจอหลังของ DSLR" width="720"></p>
-
-DSLR ถ่ายผ่านช่องมองกระจก ไม่มี LiveView ให้วาด HUD ทับ ถ้าใส่ฟิล์มไว้และไม่ได้เปิด LiveView
-จอหลังจะกลายเป็นฝาบนของกล้องฟิล์ม:
-
-- ความเร็วชัตเตอร์ รูรับแสง และเลขรูป เป็นตัวเลขใหญ่แบบ 7 ส่วน
-- ฟิล์มที่ใส่และ ISO
-- เข็มวัดแสง −2 ถึง +2 สต็อป และแถบบอกรูปที่เหลือ
-- ขึ้น WIND ON เมื่อต้องขึ้นฟิล์มรูปถัดไป
-
-เอาตาแนบช่องมองแล้วจอจะดับเอง ถ้าเปิด LiveView ก็จะกลับเป็น HUD แบบช่องมองเหมือนเดิม
-*ใหม่ใน 0.1.1 ยังรอคนทดสอบบน DSLR: ดู [กล้องที่รองรับ](#กล้องที่รองรับ)*
+ทุกภาพบันทึกเป็นไฟล์ **RAW (DNG)** จากเซนเซอร์มือถือ (หรือแปลงเป็น **CR2** 18 MP เมื่อเครื่องไม่รองรับ RAW) ล้างภาพแบบออฟไลน์ 100% บนเครื่อง ประทับข้อมูล **EXIF** จริง และบันทึกลง `Pictures/M-Film/` อัตโนมัติ
 
 ---
 
-## ฟิล์ม 68 แบบ
+## ฟีเจอร์หลัก (M-Film for Android)
 
-มีทั้งฟิล์มสีเนกาทีฟ สไลด์ ขาวดำ และฟิล์มภาพยนตร์ แยกไว้บนชั้นวาง 4 ชั้น ฟิล์มแต่ละแบบมีสี เกรน halation
-และความนุ่มของภาพเป็นของตัวเอง ม้วนหนึ่งเลือกได้ 36, 24 หรือ 12 รูป
+### ช่องมองภาพและการควบคุมระดับโปร
+- **รองรับแนวนอน & แนวตั้ง + ถนัดซ้าย/ขวา**: เลย์เอาต์สไตล์กล้อง Rangefinder พร้อมเสียงกลไกผ่าน `SoundPool` (ชัตเตอร์, ขึ้นฟิล์ม, กรอฟิล์ม, นับถอยหลัง) และจอดำวูบตอนลั่นชัตเตอร์ (~110 ms)
+- **มาตรวัดแสงสดในช่องมอง**: แสดงสปีดชัตเตอร์, รูรับแสง (`f/`), ISO และไฟวัดแสง `- · ● · +` จาก Camera2 แบบเรียลไทม์
+- **โหมด Manual เต็มรูปแบบ (`M` / `AE`)**: ปรับสปีดชัตเตอร์ (`1/1000` – `1"`) และ ISO (`100`–`3200`) เองได้ผ่าน Camera2 `CONTROL_AE_MODE_OFF`
+- **Manual Focus & Focus Loupe 2.5×**: แหวนหมุนปรับโฟกัสด้วยมือพร้อมกรอบขยาย 2.5× (แตะ 2 ครั้งหรือลากแหวนโฟกัส), แตะโฟกัส และแตะค้างเพื่อล็อก `AE/AF`
+- **Live Histogram & ไฟเตือน Highlight Clipping**: แถบ Histogram 32 ช่องมุมขวาบนช่องมอง พร้อมไฟ LED สีแดงเตือนเมื่อส่วนสว่างหลุด
+- **เส้นระดับน้ำอิเล็กทรอนิกส์ (Horizon Spirit Level)**: เส้นวัดระดับเอียงกลางช่องมอง เปลี่ยนเป็นสีอำพันเมื่อได้ระนาบ ±1.5°
+- **พรีวิวโทนฟิล์มสด (Live Film Look Preview)**: สลับได้ 3 โหมด (`FILM LOOK` / `B&W ONLY` / `RAW VIEW`) ประมวลผลบน GPU ลื่นๆ ตามโทนของฟิล์มที่ใส่อยู่
+- **White Balance Lock**: ล็อกสมดุลแสงขาว `AWB` / `DAY` / `TNG` (Tungsten) / `SHD` (Shade)
+- **สลับเลนส์, แฟลช & กล้องหน้า-หลัง**: แหวนเลือกเลนส์ (`0.6× · 1× · 2×`), แฟลช (`OFF / AUTO / ON`), สลับกล้องหน้า-หลัง, ตั้งเวลาถ่าย (`2s / 10s`) และใช้ปุ่มเพิ่ม-ลดเสียงแทนปุ่มชัตเตอร์ได้
 
-<!-- samples: docs/samples/<film>.jpg (3:2), made by ml-dev/films/pictures.py from ml-dev/films/sample/SAMPLE.CR2 -->
-<table>
-<tr>
-<td width="33%"><img src="docs/samples/portra400.jpg" alt="Kodak Portra 400"><br><b>Kodak Portra 400</b><br><sub>สีผิวอุ่นนุ่ม ไฮไลต์ละมุน</sub></td>
-<td width="33%"><img src="docs/samples/gold200.jpg" alt="Kodak Gold 200"><br><b>Kodak Gold 200</b><br><sub>แสงทองยามเย็นได้ทั้งวัน</sub></td>
-<td width="33%"><img src="docs/samples/ektar100.jpg" alt="Kodak Ektar 100"><br><b>Kodak Ektar 100</b><br><sub>สีจัด เกรนละเอียดมาก</sub></td>
-</tr>
-<tr>
-<td><img src="docs/samples/superia400.jpg" alt="Fujicolor Superia 400"><br><b>Fujicolor Superia 400</b><br><sub>เงาออกเขียว ฟิล์มถ่ายเล่นทุกวัน</sub></td>
-<td><img src="docs/samples/velvia50.jpg" alt="Fujichrome Velvia 50"><br><b>Fujichrome Velvia 50</b><br><sub>ฟิล์มสไลด์สีสด คอนทราสต์แรง</sub></td>
-<td><img src="docs/samples/kodachrome64.jpg" alt="Kodak Kodachrome 64"><br><b>Kodak Kodachrome 64</b><br><sub>สีแบบนิตยสารยุค 70</sub></td>
-</tr>
-<tr>
-<td><img src="docs/samples/cinestill800t.jpg" alt="CineStill 800T"><br><b>CineStill 800T</b><br><sub>ฟิล์มหนังแสงไฟ กลางคืนออกฟ้า</sub></td>
-<td><img src="docs/samples/pro400h.jpg" alt="Fujifilm Pro 400H"><br><b>Fujifilm Pro 400H</b><br><sub>สีพาสเทลโปร่ง มีชั้นสีที่สี่</sub></td>
-<td><img src="docs/samples/trix400.jpg" alt="Kodak Tri-X 400"><br><b>Kodak Tri-X 400</b><br><sub>ขาวดำคอนทราสต์ดิบ คลาสสิกของสตรีท</sub></td>
-</tr>
-</table>
+### ฟอร์แมตกล้องฟิล์ม & โหมดถ่ายสร้างสรรค์
+- **สัดส่วนเฟรมในตำนาน**: สลับระหว่าง **35mm (`3:2`)**, **6×6 Square (`1:1`)** และ **Hasselblad XPan (`65:24`)** พร้อมกรอบช่องมองและครอปภาพตรงสัดส่วนตอนล้าง
+- **โหมดครึ่งเฟรม Half-Frame (`½`)**: ถ่าย 2 ช็อตเรียงซ้าย-ขวาลงในเฟรมเดียวแบบ Olympus Pen F (ม้วน 36 รูปถ่ายได้ 72 ช็อต)
+- **Double Exposure ความละเอียดเต็ม (`2X`)**: ถ่ายซ้อน 2 ภาพความละเอียดเต็มก่อนส่งเข้าห้องมืด
+- **โหมด ROLL (12/24/36) หรือ SINGLE**: ถ่ายเป็นม้วนพร้อมก้านขึ้นฟิล์มแบบสมจริง หรือเปิดโหมด **SINGLE** ให้ล้างอัตโนมัติทีละรูปผ่านระบบคิว (`ConcurrentLinkedQueue`) ตามขนาดภาพมาตรฐาน (`S / M / L`) ที่ตั้งไว้
 
-**[ดูฟิล์มทั้ง 68 แบบ บนรูปเดียวกัน →](FILMS.md)**
+### ชั้นวางฟิล์ม 68 ตัว
+- **HorizontalPager + แท็บ ★ Favorites**: ปัดเลือกกระป๋องฟิล์มลื่นๆ แยก 4 กลุ่ม (Colour, Slide, B&W, Cine) พร้อมปักหมุดฟิล์มโปรดและป้าย `IN CAMERA`
+- **ภาพตัวอย่างโทนสีจริง**: ดูโทนสีตัวอย่างของแต่ละฟิล์มได้ตั้งแต่ตอนเลือก (แตะซูมเต็มจอและปัดซ้าย-ขวาเทียบระหว่างฟิล์มได้)
 
-<!-- film-states:start -->
-**ยังไม่มี film stock ใดใน 68 แบบที่วัดเทียบกับฟิล์มจริงแล้ว** 65 แบบเป็นลุค "ในสไตล์ของ" ฟิล์มนั้น และยังไม่ได้วัด 2 แบบ (Kodak HIE Infrared, Rollei Infrared 400) เป็นภาพจำลองความรู้สึกของฟิล์มอินฟราเรด เพราะ Canon ที่ยังมีฟิลเตอร์อินฟราเรดอยู่บันทึกสิ่งที่ฟิล์มแบบนั้นบันทึกไม่ได้ และ 1 แบบ (CineStill 400T) เป็นลุคของ M-Film เอง ไม่ได้แทนฟิล์มจริงตัวใด film stock จะนับว่าวัดแล้วเมื่อสีและโทนอยู่ใน pass mark ของสแกนจากแล็บของฟิล์มจริงม้วนหนึ่ง ที่ถ่ายคู่กับ Canon: [วิธีที่ film stock จะนับว่าวัดแล้ว](docs/paired-shot.th.md) · [สถานะของ film stock ทุกตัว](FILMS.md)
-<!-- film-states:end -->
+### ห้องมืดสายทดลอง & หน้า Prints
+- **เอนจิน C Multi-thread (`-O3` + `pthreads`)**: ล้างภาพเร็วขึ้น 2–3 เท่าบน 4 เธรด พร้อมพรีวิวไฟแดง Safelight
+- **Import รูปจาก Gallery มาล้างฟิล์ม**: เลือกรูปเก่าในเครื่องมาสร้างเป็นม้วนแล้วล้างผ่านฟิล์มทั้ง 68 ตัวได้ทันที
+- **ล้างซ้ำ & สลับฟิล์ม (Re-develop & Swap Film Stock)**: ม้วนที่ยังมีไฟล์ RAW/DNG สามารถกด `Re-dev` เปลี่ยนขนาด (`S/M/L`), Push/Pull (`-1/0/+1`), ปรับ **Grain (`0%–200%`)** และ **Halation (`0%–200%`)** หรือเปลี่ยนไปล้างด้วยฟิล์มตัวอื่นได้
+- **ลูกเล่นอนาล็อกครบชุด**: ประทับวันที่ยุค 90 (`Date Stamp`), **ขอบฟิล์ม 35mm พร้อมรูหนามเตย** (เปิดอัตโนมัติใน Settings หรือกดปุ่ม `35MM` แชร์เฉพาะรูปจาก Lightbox), **Light Leak** (`OFF / SUBTLE / HEAVY`) และ **Dust & Scratches** (`OFF / SUBTLE / VINTAGE`)
+- **Contact Sheet, Lightbox, EXIF & Export ZIP**:
+  - โหลดรูป Contact Sheet และ Lightbox บน `Dispatchers.IO` + `LruCache` ลื่นไม่กระตุก
+  - ตั้งชื่อซองฟิล์ม (`Label` เช่น `"KYOTO 2026"`) แสดงบนซอง, EXIF และหัวแผ่น Contact Sheet
+  - ส่งออก **Contact Sheet ความละเอียดสูง** หรือกด **`ZIP`** แชร์ทั้งม้วน (รูปทั้งหมด + Contact Sheet + Exposure Log) ในไฟล์เดียว
+  - เขียน **EXIF** แท้ (`DateTimeOriginal`, `FNumber`, ชื่อฟิล์ม, ชื่อม้วน และ **GPS Geotag** แบบเลือกเปิดได้)
+  - แสดงพื้นที่ไฟล์ RAW และมีสวิตช์ **Auto-Clean RAW** ลบไฟล์ RAW หลังล้างเสร็จอัตโนมัติ
 
-สีของฟิล์ม 59 แบบมาจากตารางจำลองฟิล์มของ [Pat David](https://patdavid.net) ซึ่งเผยแพร่ภายใต้
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) โดยเอามาจาก G'MIC ผ่านชุด [Film-Luts](https://github.com/YahiaAngelo/Film-Luts)
-ที่เหลือมาจากโมเดลฟิล์มของ M-Film เอง ([`ml-dev/films/films.py`](ml-dev/films/films.py)) ตารางพวกนี้เป็นลุคที่ทำด้วยตา
-ไม่ใช่ค่าที่วัดจากฟิล์มจริง: [THIRD_PARTY.md](THIRD_PARTY.md#the-film-colour-tables-cc-by-sa-40)
-
----
-
-## กล้องที่รองรับ
-
-M-Film ทำบน EOS M และใช้ได้จริงบนรุ่นนั้น ตอนนี้ build ได้แล้วกับทุกรุ่นที่ Magic Lantern เองใช้ได้อย่างเสถียร
-(DIGIC 4 และ 5) ตอนนี้มีคนลองบนกล้องจริงไปเกือบทุกรุ่นแล้ว ตารางด้านล่างบอกว่าแต่ละรุ่นไปถึงไหนและยังติดอะไร ถ้าคุณมีรุ่นที่ยัง *รอคนทดสอบ* ช่วยทดสอบได้:
-[TESTING.md](TESTING.md) บอกวิธีไว้ (ใช้เวลาประมาณ 20 นาที และถอดกลับได้เสมอ)
-
-<!-- cameras:start -->
-| กล้อง | เฟิร์มแวร์ Canon | สถานะ | หมายเหตุ | ไฟล์ลงการ์ด |
-|---|---|---|---|---|
-| Canon EOS M | 2.0.2 | ✅ **ใช้ได้** | ตั้งแต่ 0.2 film OS โหลดเป็นโมดูลบนรุ่นนี้ด้วย (เหมือน 550D และ 650D) ยังไม่มีคนยืนยันบนรุ่นนี้ ลองแล้วแจ้งผลได้ 0.2 ซ่อนสเกลชดเชยแสงของ Canon ที่ทับช่องมองได้ที่ *Advanced → Hide Canon's graphics* ([#67](../../issues/67)) | `M-Film-camera-EOSM.202.zip` |
-| Canon EOS 5D Mark II | 2.1.2 | ⚠️ ลองแล้ว ยังมีปัญหา | ส่วนใหญ่ค้างตอนเปิด เพราะ build ใหญ่เกินหน่วยความจำตอนบูต ([#18](../../issues/18)) 0.1.3 มี build ที่เล็กลง (ตัดบางฟีเจอร์ของ Magic Lantern ออก แต่ห้องมืดยังอยู่) และแก้รูปสีชมพู รอคนลอง ตั้งแต่ 0.2 film OS โหลดเป็นโมดูลบนรุ่นนี้ด้วย (เหมือน 550D และ 650D) ยังไม่มีคนยืนยันบนรุ่นนี้ ลองแล้วแจ้งผลได้ | `M-Film-camera-5D2.212.zip` |
-| Canon EOS 5D Mark III (firmware 1.1.3) | 1.1.3 | ⚠️ ลองแล้ว ยังมีปัญหา | เปิดและถ่ายได้ ห้องมืดในกล้องหาไฟล์ RAW ไม่เจอ ([#31](../../issues/31)) แก้แล้วใน 0.1.3 ตั้งแต่ 0.2 film OS โหลดเป็นโมดูลบนรุ่นนี้ด้วย (เหมือน 550D และ 650D) ยังไม่มีคนยืนยันบนรุ่นนี้ ลองแล้วแจ้งผลได้ | `M-Film-camera-5D3.113.zip` |
-| Canon EOS 5D Mark III (firmware 1.2.3) | 1.2.3 | ⚠️ ลองแล้ว ยังมีปัญหา | เปิดและถ่ายได้ ห้องมืดในกล้องหาไฟล์ RAW ไม่เจอ ([#16](../../issues/16), [#37](../../issues/37)) แก้แล้วใน 0.1.3 ตั้งแต่ 0.2 film OS โหลดเป็นโมดูลบนรุ่นนี้ด้วย (เหมือน 550D และ 650D) ยังไม่มีคนยืนยันบนรุ่นนี้ ลองแล้วแจ้งผลได้ | `M-Film-camera-5D3.123.zip` |
-| Canon EOS 6D | 1.1.6 | ✅ **ใช้ได้** | ใช้ได้ตั้งแต่ 0.1.2 ([#17](../../issues/17), [#22](../../issues/22)) ตั้งแต่ 0.2 film OS โหลดเป็นโมดูลบนรุ่นนี้ด้วย (เหมือน 550D และ 650D) ยังไม่มีคนยืนยันบนรุ่นนี้ ลองแล้วแจ้งผลได้ 0.2 ถือจอไว้จนบันทึกรูปเสร็จ และตัวเลขสว่างเมื่อหมุนปุ่ม ([#17](../../issues/17), [#23](../../issues/23)) ถ้ายังเป็นอยู่แจ้งได้ | `M-Film-camera-6D.116.zip` |
-| Canon EOS 50D | 1.0.9 | ✅ **ใช้ได้** | ใช้ได้ ([#43](../../issues/43)) 0.1.5 วาดจอใหม่เมื่อ Canon วาดทับ แต่อาจยังกะพริบอยู่เล็กน้อยเหมือนบน 500D 0.1.6 ประกอบภาพฝาบนกล้องนอกจอก่อน แล้ววาดกลับเฉพาะแถวที่ Canon วาดทับ รอรายงานใน [#64](../../issues/64) ตั้งแต่ 0.2 film OS โหลดเป็นโมดูลบนรุ่นนี้ด้วย (เหมือน 550D และ 650D) ยังไม่มีคนยืนยันบนรุ่นนี้ ลองแล้วแจ้งผลได้ | `M-Film-camera-50D.109.zip` |
-| Canon EOS 60D | 1.1.1 | ✅ **ใช้ได้** | ใช้ได้ตั้งแต่ 0.1.3 ([#25](../../issues/25)) 0.1.5 ตั้งการหมุนจอเองได้ ([#49](../../issues/49)) ตั้งแต่ 0.2 film OS โหลดเป็นโมดูลบนรุ่นนี้ด้วย (เหมือน 550D และ 650D) ยังไม่มีคนยืนยันบนรุ่นนี้ ลองแล้วแจ้งผลได้ | `M-Film-camera-60D.111.zip` |
-| Canon EOS 70D | 1.1.2 | ⚠️ ลองแล้ว ยังมีปัญหา | 0.1.5 ใช้ได้บน 70D ของผู้ทดสอบคนหนึ่ง แบบ film OS เป็นโมดูล ([#40](../../issues/40)) อีกคนติดตั้ง Magic Lantern ได้ แต่เปิดเครื่องแล้วเข้า firmware ของ Canon ([#58](../../issues/58)) ต้องการรายงานเพิ่ม | `M-Film-camera-70D.112.zip` |
-| Canon EOS 100D / Rebel SL1 / Kiss X7 | 1.0.1 | ✅ **ใช้ได้** | ใช้ได้ แบบ film OS เป็นโมดูลตั้งแต่ 0.1.5 ([#48](../../issues/48)) 0.1.6 ชุดแรก (8 พ.ย.) ชั้นฟิล์มกะพริบและกดปุ่มไม่ได้ แก้แล้วใน zip ที่ build ใหม่เมื่อ 9 พ.ย. และใน 0.2 ผู้ทดสอบยืนยันว่ากลับมาใช้ได้ ([#73](../../issues/73)) | `M-Film-camera-100D.101.zip` |
-| Canon EOS 500D / Rebel T1i / Kiss X3 | 1.1.1 | ✅ **ใช้ได้** | ใช้ได้ ([#44](../../issues/44)) 0.1.5 วาดจอใหม่เมื่อ Canon วาดทับ แต่ยังกะพริบอยู่เล็กน้อย 0.1.6 ประกอบภาพฝาบนกล้องนอกจอก่อน แล้ววาดกลับเฉพาะแถวที่ Canon วาดทับ ยังกะพริบอยู่ไหม แจ้งได้ที่ [#64](../../issues/64) ตั้งแต่ 0.2 film OS โหลดเป็นโมดูลบนรุ่นนี้ด้วย (เหมือน 550D และ 650D) ยังไม่มีคนยืนยันบนรุ่นนี้ ลองแล้วแจ้งผลได้ | `M-Film-camera-500D.111.zip` |
-| Canon EOS 550D / Rebel T2i / Kiss X4 | 1.0.9 | ✅ **ใช้ได้** | ใช้ได้ตั้งแต่ 0.1.5 แบบโมดูล ห้องมืดในกล้องครบ ([#48](../../issues/48), [#50](../../issues/50)) | `M-Film-camera-550D.109.zip` |
-| Canon EOS 600D / Rebel T3i / Kiss X5 | 1.0.2 | ✅ **ใช้ได้** | เปิดและถ่ายได้ตั้งแต่ 0.1.5 แบบโมดูล ([#46](../../issues/46)) ห้องมืดในกล้องยังไม่มีคนยืนยัน ให้ตั้ง Image quality เป็น RAW | `M-Film-camera-600D.102.zip` |
-| Canon EOS 650D / Rebel T4i / Kiss X6i | 1.0.4 | ✅ **ใช้ได้** | ใช้ได้ แบบ film OS เป็นโมดูล ห้องมืดในกล้องครบ ([#54](../../issues/54)) ตั้งแต่ 0.1.3 ถึง 0.1.5 zip ปกติไม่มีห้องมืด (ถ้าห้องมืดอยู่ในตัว 650D เปิดไม่ขึ้น [#34](../../issues/34)) ถ้าใช้ 0.1.5 ให้เอา `-module.zip` | `M-Film-camera-650D.104.zip` |
-| Canon EOS 700D / Rebel T5i / Kiss X7i | 1.1.5 | ⚠️ ลองแล้ว ยังมีปัญหา | build แบบโมดูลของ 0.1.5 ใช้ได้บน 700D ของผู้ทดสอบ ห้องมืดในกล้องครบ ([#19](../../issues/19)) แต่เมนูของ M-Film กับของ Canon ยังวาดทับกันเป็นบางครั้ง 0.1.6 ยึดจอของ Canon ไว้ตอนเปิด film OS และตอนปิดกลับไปที่ HUD รอรายงาน ตั้งแต่ 0.1.3 ถึง 0.1.5 zip ปกติไม่มีห้องมืด ถ้าใช้ 0.1.5 ให้เอา `-module.zip` | `M-Film-camera-700D.115.zip` |
-| Canon EOS 1100D / Rebel T3 / Kiss X50 | 1.0.5 | ✅ **ใช้ได้** | ใช้ได้บน 1100D ของผู้ทดสอบ ([#81](../../issues/81), [#109](../../issues/109)) ทั้งการถ่าย ตัวนับเฟรมใน LiveView (ช่องมองแบบออปติคัลของรุ่นนี้ไม่มีที่แสดงตัวนับ) และห้องมืดในกล้องครบทั้งสามขนาด ใช้เวลาราว 11, 24 และ 37 วินาทีต่อเฟรมสำหรับ Small, Medium และ Large firmware ล่าสุดของ Canon สำหรับรุ่นนี้คือ 1.0.6 แต่ M-Film ต้องใช้ 1.0.5 ถ้ากล้องเป็น 1.0.6 ให้ลงตัวอัปเดต 1.0.5 ของ Canon กลับก่อน ([#81](../../issues/81)) ไม่อย่างนั้น *Firmware ver.* → update อาจค้างที่ *Loading* ([TESTING.md](TESTING.md#if-firmware-ver--update-stays-on-loading)) | `M-Film-camera-1100D.105.zip` |
-| Canon EOS 1300D / Rebel T6 / Kiss X80 | 1.1.0 | 🧪 build ได้แล้ว รอคนทดสอบ | ใหม่ใน 0.2.1 ใช้พอร์ต 1300D ของ Magic Lantern ที่ยังใหม่และเป็นรุ่นทดลอง ติดตั้งด้วย mlinstall ผ่าน USB ไม่ใช่การอัปเดต firmware ([TESTING.md](TESTING.md#canon-eos-1300d)) ใส่ฟิล์มแล้วกล้องจะไม่ปรับ ISO, white balance และ picture style ให้ เพราะ Magic Lantern ยังเปลี่ยนค่ากล้องบน 1300D ไม่ได้ ลุคฟิล์มจะมาตอนล้างฟิล์ม ให้ตั้ง white balance ของกล้องเป็น Daylight เอง (Tungsten สำหรับฟิล์มทังสเตน) เพราะห้องมืดล้างด้วย white balance ที่กล้องตั้งอยู่ firmware 1.1.0 ของ Canon มีสองแบบ ถ้าเปิดเครื่องแล้วค้าง ให้ถอดแบตแล้วใส่การ์ดเดิมกลับ รอคนลองเป็นคนแรก | `M-Film-camera-1300D.110.zip` |
-
-**ยังไม่รองรับ:** 5D Mark IV, 5DS R, 6D Mark II, 7D Mark II, 77D, 80D, 200D, 750D, 850D, M50, R, R5, R6, RP, SX70 HS, SX740 HS (Magic Lantern เองยังเป็นรุ่นทดลองบนกล้องเหล่านี้) · 7D (source ปัจจุบันของ Magic Lantern build รุ่นนี้ไม่ได้)
-<!-- cameras:end -->
-
-✅ ลองบนกล้องแล้ว ใช้ได้ · ⚠️ ลองแล้ว ยังมีปัญหา · 🧪 build ได้แล้ว รอคนลอง ตั้งแต่ 0.2 film OS เป็นโมดูลบนทุกรุ่น ([เหตุผล](ml-dev/MEMORY.md)) รุ่นละ zip เดียว ไฟล์ลงการ์ดอยู่ใน [release](../../releases/latest) แต่ละเวอร์ชัน
-รายชื่อกล้องอยู่ที่ [`ml-dev/cameras.txt`](ml-dev/cameras.txt) วิธีทำให้กล้องรุ่นอื่นอยู่ใน [PORTING.md](PORTING.md)
-
-### ลงในกล้อง
-
-1. เฟิร์มแวร์ Canon ต้องตรงกับในตารางเป๊ะๆ (MENU → แท็บตั้งค่าแท็บสุดท้าย → *Firmware ver.*)
-2. แตกไฟล์ลงการ์ดของรุ่นคุณลงการ์ด SD ใส่การ์ดในกล้อง แล้วกด *Firmware ver.* → update ครั้งเดียว
-   หลังจากนั้นเปิดกล้องด้วยการ์ดใบนั้น M-Film จะเปิดขึ้นมาพร้อมกล้องเลย
-3. ในเมนู Canon ตั้ง **Image quality** (คุณภาพของภาพ) เป็น **RAW** (RAW+JPEG ก็ได้) และ **Image review** เป็น **Off**
-   ห้องมืดล้างจากไฟล์ RAW รูปที่ถ่ายเป็น JPEG ล้างไม่ได้
-4. ขั้นตอนเต็มและวิธีถอดออก: [TESTING.md](TESTING.md) จะ build เอง: `ml-dev/build_fork.sh <กล้อง>`
-
-### อัปเดตเป็นเวอร์ชันใหม่
-
-อย่าแตกไฟล์เวอร์ชันใหม่ทับของเดิม ไฟล์เก่าที่ค้างอยู่ทำให้กล้องรวนได้ ให้เริ่มจากการ์ดเปล่าแทน:
-
-1. **จบม้วนที่ใส่อยู่** แล้วล้างให้เสร็จ (ในกล้องหรือด้วย Darkrooms) ลงใหม่แล้วจะไม่มีม้วนค้างอยู่
-2. **ก๊อปรูปออกจากการ์ด** (โฟลเดอร์ `DCIM`) รวมโฟลเดอร์ JPEG ที่ล้างแล้วด้วย
-3. **ฟอร์แมตการ์ดในกล้อง** แล้วเลือกลบ Magic Lantern ออก
-4. **แตกไฟล์เวอร์ชันใหม่**ลงการ์ด เหมือนตอนลงครั้งแรก
-5. ใส่การ์ดในกล้อง กด *Firmware ver.* → update อีกครั้ง แล้วเปิดกล้อง
-
-ค่าที่ตั้งไว้ (ฟิล์ม สีจอ Film mode) จะกลับเป็นค่าเริ่มต้น ต้องตั้งใหม่
+### เชื่อมต่อกับระบบ Android
+- **Home Screen Widget**: โชว์กระป๋องฟิล์มที่ใส่อยู่และเลขนับเฟรมบนหน้าจอโฮม แตะเปิดกล้องได้ทันที
+- **App Shortcuts & Quick Settings Tile**: กดค้างไอคอนแอปเข้า **Film Shelf**, **Darkroom**, **Prints** และเพิ่มปุ่มลัดบน Quick Settings ของเครื่องได้
 
 ---
 
-## ล้างบนคอม: Darkrooms
-
-กล้องล้างม้วนได้เองแต่ช้า **Darkrooms** ล้างบนคอมได้เร็วกว่ามาก เสียบกล้อง (หรือใส่การ์ดในเครื่องอ่านการ์ด)
-แล้วเปิด Darkrooms โปรแกรมจะเจอกล้องเอง แสดงทุกม้วนที่ถ่ายพร้อมฟิล์มของม้วนนั้น แล้วล้างแบบความละเอียดเต็ม
+## ฟิล์มทั้งหมด 68 ตัว
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/app-rolls.jpg" alt="ม้วนฟิล์ม"></td>
-<td width="50%"><img src="docs/images/app-darkroom.jpg" alt="กำลังล้างม้วน"></td>
+<td width="33%"><img src="docs/samples/portra400.jpg" alt="Kodak Portra 400"><br><b>Kodak Portra 400</b><br><sub>ผิวอุ่นนุ่ม ไฮไลต์ละมุน</sub></td>
+<td width="33%"><img src="docs/samples/gold200.jpg" alt="Kodak Gold 200"><br><b>Kodak Gold 200</b><br><sub>แสงเย็นสีทองตลอดวัน</sub></td>
+<td width="33%"><img src="docs/samples/ektar100.jpg" alt="Kodak Ektar 100"><br><b>Kodak Ektar 100</b><br><sub>สีจัดจ้าน เกรนละเอียด</sub></td>
 </tr>
 <tr>
-<td><b>ม้วนของคุณ</b> แต่ละม้วนมีกลักฟิล์มและแถบรูปของม้วนนั้น ล้างทั้งม้วนหรือเลือกเฉพาะบางรูปก็ได้</td>
-<td><b>ไฟแดงขึ้น</b> รูปออกมาจากถาดน้ำยาแล้วไปแขวนตากบนราว</td>
+<td><img src="docs/samples/superia400.jpg" alt="Fujicolor Superia 400"><br><b>Fujicolor Superia 400</b><br><sub>เงาอมเขียว สไตล์สแน็ป</sub></td>
+<td><img src="docs/samples/velvia50.jpg" alt="Fujichrome Velvia 50"><br><b>Fujichrome Velvia 50</b><br><sub>ฟิล์มสไลด์สีสด คอนทราสต์จัด</sub></td>
+<td><img src="docs/samples/kodachrome64.jpg" alt="Kodak Kodachrome 64"><br><b>Kodak Kodachrome 64</b><br><sub>โทนสีนิตยสารยุค 70</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/app-lights-on.jpg" alt="เปิดไฟ: ม้วนและ contact sheet"></td>
-<td><img src="docs/images/app-develop.jpg" alt="ตั้งค่าการล้าง"></td>
-</tr>
-<tr>
-<td><b>เปิดไฟ</b> ทุกม้วนได้ contact sheet และโฟลเดอร์ของตัวเอง</td>
-<td><b>ละเอียดเต็มที่</b> ใช้ทุกพิกเซลของ RAW, JPEG สี 4:4:4, เก็บ EXIF ไว้ และใส่วันที่บนรูปได้</td>
+<td><img src="docs/samples/cinestill800t.jpg" alt="CineStill 800T"><br><b>CineStill 800T</b><br><sub>ฟิล์มหนังทังสเตน กลางคืนอมฟ้า แสงฟุ้งแดง</sub></td>
+<td><img src="docs/samples/pro400h.jpg" alt="Fujifilm Pro 400H"><br><b>Fujifilm Pro 400H</b><br><sub>พาสเทลโปร่งนุ่มนวล</sub></td>
+<td><img src="docs/samples/trix400.jpg" alt="Kodak Tri-X 400"><br><b>Kodak Tri-X 400</b><br><sub>ขาวดำเกรนดิบ คลาสสิกสายสตรีท</sub></td>
 </tr>
 </table>
 
-### ฟรี หรือ Full
-
-| | ฟรี | Darkrooms Full |
-|---|---|---|
-| ล้างได้ต่อวัน | 1 ม้วน ม้วนละไม่เกิน 36 รูป (ล้างม้วนเดิมซ้ำในวันเดียวกันไม่นับเพิ่ม) | ไม่จำกัด |
-| ทุกฟิล์ม เต็มความละเอียด EXIF และ contact sheet | ✓ | ✓ |
-| ล้างหลายม้วนพร้อมกันด้วยทุก core | | ✓ |
-| ราคา | ฟรี (ใช้บัญชี Google) | **US$2.99 ต่อเดือน** หรือ **US$14.99 จ่ายครั้งเดียว** อัปเดตฟรี |
-
-ห้องมืดในกล้องยังฟรีและไม่จำกัดเหมือนเดิม Darkrooms ผูกกับ**บัญชี Google** ไม่มี key ให้กรอกหรือต้องเก็บ
-กดป้ายมุมขวาบน → *Sign in with Google* แล้วเลือก *Get it monthly* หรือ *Get it for life* จ่ายเงินแล้วโปรแกรมเปลี่ยนเป็น Full เองในไม่กี่วินาที
-1 บัญชีใช้ได้ **2 เครื่อง**พร้อมกัน (เครื่องที่ 2 ก็ login ด้วยบัญชี Google เดียวกัน) ยกเลิกรายเดือนได้ทุกเมื่อในโปรแกรม
-(*Manage the subscription*) ใช้ได้ต่อจนครบเดือนที่จ่ายแล้ว
-[นโยบายความเป็นส่วนตัว](https://darkrooms-licence.suphalapruksasathit.workers.dev/privacy): รูปของคุณไม่ออกจากคอมเลย
-
-### ดาวน์โหลด
-
-| คอมของคุณ | ไฟล์ | เปิดยังไง |
-|---|---|---|
-| **Windows 10 / 11** | `Darkrooms-windows-x64.zip` | แตกไฟล์ เปิดโฟลเดอร์ `Darkrooms` แล้วเปิด `Darkrooms.exe` (ไอคอนสีส้ม Windows มักแสดงชื่อแค่ `Darkrooms` ไม่มี `.exe`) ถ้า Windows เตือน: *More info* → *Run anyway* |
-| **Mac ชิป Intel** | `Darkrooms-macos-intel.zip` | แตกไฟล์ ลากไปไว้ใน Applications แล้วเปิด ครั้งแรกไปที่ *System Settings → Privacy & Security → Open Anyway* (macOS 14 ลงไป: คลิกขวา → Open) |
-| **Mac ชิป Apple silicon** | `Darkrooms-macos-apple-silicon.zip` | เหมือนกัน |
-
-โหลดได้จาก **[release ของ Darkrooms](../../releases?q=Darkrooms&expanded=true)** (ตัวใหม่สุดอยู่บนสุด) ขนาดประมาณ 30–50 MB โปรแกรมยังไม่ได้ sign กับ Apple หรือ
-Microsoft ครั้งแรกจึงมีคำเตือน
+**[ดูตัวอย่างฟิล์มครบทั้ง 68 ตัวบนภาพเดียวกัน →](FILMS.md)**
 
 ---
 
-## ทำต่อยอด
+## ดาวน์โหลดและวิธี Build
 
-- **มีกล้องรุ่นในตาราง?** [TESTING.md](TESTING.md): ลองแล้วบอกผล รุ่นนั้นจะได้ขึ้นเป็น ✅
-- **กล้องรุ่นอื่น?** [PORTING.md](PORTING.md) บอกว่าส่วนไหนย้ายได้ง่าย (หน้าจอ Film OS)
-  ส่วนไหนต้องทำใหม่ทุกรุ่น (ส่วนที่ต่อกับ Magic Lantern) และควรเริ่มยังไง
-- **เจอปัญหา?** [แจ้งใน issues](../../issues/new/choose) แล้วแปะสิ่งที่ขึ้นในไอคอนเฟือง →
-  *What does the computer see?*
-- **ทุกหน้าจอ ทุกปุ่ม และวิธีทำงานข้างใน:** [คู่มือในกล้อง](docs/MANUAL.th.md)
-- **ฟิล์ม** (ค่าฟิล์ม, รายการ LUT) อยู่ใน [`ml-dev/films/`](ml-dev/films/) build กล้องจะอบลงการ์ดให้
-- **Darkrooms** โปรแกรมบนคอม เป็นโปรแกรมปิดซอร์ส ไม่ได้อยู่ใน repo นี้
+### ติดตั้งบน Android
+ดาวน์โหลดไฟล์ APK เวอร์ชันล่าสุดได้จาก GitHub Releases:
+👉 **[ดาวน์โหลด `android-latest` APK](https://github.com/6ixthxense/mfilm-canon-film-simulation/releases/tag/android-latest)**
 
-## สนับสนุน
+### Build เองจากซอร์สโค้ด
+```bash
+# 1. สร้างฟอนต์ ตารางสี LUT และภาพตัวอย่างฟิล์ม
+bash android/scripts/build_assets.sh
 
-ส่วนในกล้องของ M-Film ใช้ฟรีและจะฟรีตลอดไป ถ้าได้ม้วนที่ชอบ
-**[เลี้ยงกาแฟผู้พัฒนาได้ที่นี่ ☕](https://buy.stripe.com/7sY14p8d93QE5Ny5M58so02)**
+# 2. คอมไพล์ APK Release
+cd android && gradle assembleRelease
+# ไฟล์ที่ได้: android/app/build/outputs/apk/release/app-release.apk
+```
 
-## License
+สำหรับรายละเอียดเชิงลึกดูได้ที่ [android/README.md](android/README.md) ส่วนฝั่งกล้อง Canon EOS (Magic Lantern) และโปรแกรม **Darkrooms** บนคอมพิวเตอร์ สามารถติดตามต้นฉบับได้ที่ **[HNGSeries/mfilm-canon-film-simulation](https://github.com/HNGSeries/mfilm-canon-film-simulation)** และ [docs/MANUAL.th.md](docs/MANUAL.th.md)
 
-M-Film สร้างโดย **HNGSeries** ต่อยอดจาก [Magic Lantern](https://www.magiclantern.fm/)
+---
 
-repo นี้ใช้ GPL-2.0 ([LICENSE](LICENSE)) เพราะส่วนในกล้องต่อยอดจาก Magic Lantern
-Darkrooms (โปรแกรมบนคอม) เป็นโปรแกรมแยก ปิดซอร์ส ใช้สัญญาอนุญาตของตัวเอง ตารางสีของฟิล์ม 59 แบบดัดแปลงจากของ
-Pat David และเป็น CC BY-SA 4.0 ไม่ใช่ GPL-2.0 ตารางเหล่านี้ ฟอนต์ และส่วนอื่นๆ: [THIRD_PARTY.md](THIRD_PARTY.md) ไม่มีส่วนเกี่ยวข้องกับ Canon, Kodak, Fujifilm หรือผู้ผลิตฟิล์มรายใด
+## เครดิตและผู้สร้างต้นฉบับ
+
+- **ผู้สร้างต้นฉบับ — [HNGSeries](https://github.com/HNGSeries)**:
+  โปรเจกต์นี้ Fork มาจาก **[HNGSeries/mfilm-canon-film-simulation](https://github.com/HNGSeries/mfilm-canon-film-simulation)** ขอมอบเครดิตหลักให้ **HNGSeries** สำหรับการสร้างสรรค์ M-Film, แนวคิด Film OS, สูตรจำลองฟิล์ม 68 ตัว, เอนจินห้องมืดภาษา C (`ml-dev/filmos/`) และเวอร์ชันสำหรับกล้อง Canon Magic Lantern
+  สามารถสนับสนุนผู้พัฒนาต้นฉบับได้ที่: **[Buy HNGSeries a coffee ☕](https://buy.stripe.com/7sY14p8d93QE5Ny5M58so02)**
+- **[Magic Lantern](https://www.magiclantern.fm/)** (`GPL-2.0`): เฟิร์มแวร์เสริมที่เป็นรากฐานของฝั่งกล้อง Canon
+- **[Pat David](https://patdavid.net)** (`CC BY-SA 4.0`) และ **[Film-Luts โดย Yahia Angelo](https://github.com/YahiaAngelo/Film-Luts)** (`MIT`): ตารางสีจำลองฟิล์มสำหรับ 59 จาก 68 ฟิล์ม (รายละเอียดใน [THIRD_PARTY.md](THIRD_PARTY.md))
+- **ฟอนต์ Barlow** (`SIL Open Font License 1.1`)
+
+---
+
+## สัญญาอนุญาต (License)
+
+- โค้ดในคลังนี้ใช้สัญญาอนุญาต **GNU General Public License v2.0** ([LICENSE](LICENSE)) ตามต้นฉบับ M-Film และ Magic Lantern
+- ตารางสีฟิล์ม 59 ตัว (`ML/DARKROOM/LOOKnn.LUT`) อยู่ภายใต้ **CC BY-SA 4.0** โดย Pat David ([THIRD_PARTY.md](THIRD_PARTY.md))
+- โปรเจกต์นี้ไม่มีส่วนเกี่ยวข้องหรือได้รับการรับรองจาก Canon, Kodak, Fujifilm, CineStill, Ilford, Hasselblad, Olympus หรือผู้ผลิตกล้อง/ฟิล์มรายใด
