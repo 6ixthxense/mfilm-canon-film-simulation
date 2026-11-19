@@ -39,15 +39,29 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/mfilm_widget_info" />
         </receiver>
+        <service
+            android:name=".MFilmTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_camera"
+            android:label="M-Film"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboardHidden|keyboard|navigation|uiMode"
             android:exported="true"
+            android:launchMode="singleTop"
             android:screenOrientation="fullSensor">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
     </application>
 </manifest>

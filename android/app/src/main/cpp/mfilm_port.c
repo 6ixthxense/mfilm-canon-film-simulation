@@ -586,6 +586,35 @@ int mf_lab_has_raws(int roll_no)
     return 0;
 }
 
+int mf_lab_set_film(int roll_no, int film_idx)
+{
+    if (roll_no <= 0 || film_idx < 0 || film_idx >= fos_nfilms) return -1;
+    pthread_mutex_lock(&state_lock);
+    char path[700], tmp[720];
+    snprintf(path, sizeof(path), "%s/ROLL_%03d.TXT", dcim, roll_no);
+    snprintf(tmp, sizeof(tmp), "%s/ROLL_%03d.TMP", dcim, roll_no);
+    FILE *in = fopen(path, "rb");
+    if (!in) { pthread_mutex_unlock(&state_lock); return -1; }
+    FILE *out = fopen(tmp, "wb");
+    if (!out) { fclose(in); pthread_mutex_unlock(&state_lock); return -1; }
+    char line[512];
+    int replaced = 0;
+    while (fgets(line, sizeof(line), in))
+    {
+        if (!replaced && strncmp(line, "film =", 6) == 0)
+        {
+            fprintf(out, "film = %s\n", fos_films[film_idx].key);
+            replaced = 1;
+        }
+        else fputs(line, out);
+    }
+    fclose(in);
+    fclose(out);
+    int r = rename(tmp, path);
+    pthread_mutex_unlock(&state_lock);
+    return r == 0 && replaced ? 0 : -1;
+}
+
 int mf_import_roll(int film, int count, int *out_first_file)
 {
     if (film < 0 || film >= fos_nfilms || count <= 0) return -1;
@@ -626,10 +655,18 @@ static int dk_roll = 0;
 static int dk_film = 0;
 static int dk_size = 0;
 static int dk_push = 0;
+static int dk_grain = 100;
+static int dk_hal = 100;
 static int dk_target = 0;
 static int dk_failed = 0;
 static char dk_dcim[160] = "";
 static char dk_err[128] = "";
+
+void mf_dev_set_recipe(int grain_pct, int hal_pct)
+{
+    dk_grain = fos_clamp(grain_pct, 0, 200);
+    dk_hal = fos_clamp(hal_pct, 0, 200);
+}
 
 const char *mf_dev_error(void) { return dk_err; }
 
@@ -716,6 +753,7 @@ int mf_dev_step(int budget_ms, int out[3])
             }
             if (dk_dev && settings[FS_STAMP]) fos_dev_stamp(dk_dev, 1);
             if (dk_dev && dk_push != 0) fos_dev_push(dk_dev, (float) dk_push);
+            if (dk_dev) fos_dev_recipe(dk_dev, dk_grain, dk_hal);
             if (dk_dev) break;
             dk_done++;
         }

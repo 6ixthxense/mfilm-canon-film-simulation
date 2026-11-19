@@ -31,7 +31,14 @@ object DevelopState {
     var status by mutableStateOf<String?>(null)
 }
 
-private data class DevJob(val rollNo: Int, val size: Int, val push: Int, val targetFrame: Int)
+private data class DevJob(
+    val rollNo: Int,
+    val size: Int,
+    val push: Int,
+    val targetFrame: Int,
+    val grainPct: Int,
+    val halPct: Int,
+)
 
 class DevelopService : Service() {
     private val worker = Executors.newSingleThreadExecutor()
@@ -53,6 +60,8 @@ class DevelopService : Service() {
         val size = intent?.getIntExtra(EXTRA_SIZE, 0) ?: 0
         val push = intent?.getIntExtra(EXTRA_PUSH, 0) ?: 0
         val targetFrame = intent?.getIntExtra(EXTRA_FRAME, 0) ?: 0
+        val grainPct = intent?.getIntExtra(EXTRA_GRAIN, 100) ?: 100
+        val halPct = intent?.getIntExtra(EXTRA_HAL, 100) ?: 100
         if (rollNo <= 0) return START_NOT_STICKY
 
         val chId = "mfilm_darkroom"
@@ -76,7 +85,7 @@ class DevelopService : Service() {
         }
 
         cancelled = false
-        queue.add(DevJob(rollNo, size, push, targetFrame))
+        queue.add(DevJob(rollNo, size, push, targetFrame, grainPct, halPct))
         DevelopState.queuedCount = queue.size
 
         if (draining.compareAndSet(false, true)) {
@@ -97,6 +106,7 @@ class DevelopService : Service() {
                         DevelopState.totalFrames = 0
                         DevelopState.progress = 0
 
+                        Native.devSetRecipe(job.grainPct, job.halPct)
                         val total = Native.devOpen(job.rollNo, job.size, job.push, job.targetFrame)
                         if (total <= 0) {
                             DevelopState.error = if (total < 0) "Cannot open roll" else "Nothing to develop"
@@ -128,8 +138,13 @@ class DevelopService : Service() {
                         Native.devClose()
                         if (!cancelled) {
                             val card = Card(this)
+                            val prefs = getSharedPreferences("MainActivity", MODE_PRIVATE)
+                            val lightLeak = prefs.getInt("light_leak_mode", 0)
+                            val dust = prefs.getInt("dust_mode", 0)
+                            val rebate = prefs.getBoolean("film_rebate", false)
+                            card.postProcessRollPrints(job.rollNo, job.targetFrame, lightLeak, dust, rebate)
                             totalSaved += card.exportPrintsSync()
-                            val autoClean = getSharedPreferences("MainActivity", MODE_PRIVATE).getBoolean("auto_clean_raw", false)
+                            val autoClean = prefs.getBoolean("auto_clean_raw", false)
                             if (autoClean && job.targetFrame == 0) {
                                 val roll = parseLabRolls(Native.labRolls()).find { it.number == job.rollNo }
                                 if (roll != null && roll.isDeveloped && !roll.inCamera) {
@@ -172,13 +187,25 @@ class DevelopService : Service() {
         const val EXTRA_SIZE = "size"
         const val EXTRA_PUSH = "push"
         const val EXTRA_FRAME = "frame"
+        const val EXTRA_GRAIN = "grain"
+        const val EXTRA_HAL = "hal"
 
-        fun start(context: Context, rollNo: Int, size: Int, pushStops: Int = 0, targetFrame: Int = 0) {
+        fun start(
+            context: Context,
+            rollNo: Int,
+            size: Int,
+            pushStops: Int = 0,
+            targetFrame: Int = 0,
+            grainPct: Int = 100,
+            halPct: Int = 100,
+        ) {
             val i = Intent(context, DevelopService::class.java)
                 .putExtra(EXTRA_ROLL, rollNo)
                 .putExtra(EXTRA_SIZE, size)
                 .putExtra(EXTRA_PUSH, pushStops)
                 .putExtra(EXTRA_FRAME, targetFrame)
+                .putExtra(EXTRA_GRAIN, grainPct)
+                .putExtra(EXTRA_HAL, halPct)
             context.startForegroundService(i)
         }
 

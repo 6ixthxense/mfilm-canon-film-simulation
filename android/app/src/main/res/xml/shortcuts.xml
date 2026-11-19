@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_tile_camera"
+        android:shortcutId="shelf"
+        android:shortcutShortLabel="@string/shortcut_shelf">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="app.mfilm.android.MainActivity"
+            android:targetPackage="app.mfilm.android">
+            <extra android:name="route" android:value="shelf" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_tile_camera"
+        android:shortcutId="darkroom"
+        android:shortcutShortLabel="@string/shortcut_darkroom">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="app.mfilm.android.MainActivity"
+            android:targetPackage="app.mfilm.android">
+            <extra android:name="route" android:value="darkroom" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_tile_camera"
+        android:shortcutId="prints"
+        android:shortcutShortLabel="@string/shortcut_prints">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="app.mfilm.android.MainActivity"
+            android:targetPackage="app.mfilm.android">
+            <extra android:name="route" android:value="prints" />
+        </intent>
+    </shortcut>
+</shortcuts>

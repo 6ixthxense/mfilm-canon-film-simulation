@@ -4,7 +4,17 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.RadialGradient
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Shader
+import android.graphics.Typeface
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Environment
@@ -15,6 +25,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.Random
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
@@ -36,7 +47,10 @@ class Card(private val context: Context) {
     private val exportedList = File(root, "ML/EXPORTED.TXT")
     private val memosFile = File(root, "ML/MEMOS.TXT")
     private val gpsFile = File(root, "ML/GPS.TXT")
+    private val formatsFile = File(root, "ML/FORMATS.TXT")
     val widgetCanisterFile = File(root, "ML/WIDGET_CANISTER.PNG")
+
+    fun rollLogFile(rollNo: Int): File = File(dcim, "ROLL_%03d.TXT".format(rollNo))
 
     private val writer = Executors.newSingleThreadExecutor()
     private val exporter = Executors.newSingleThreadExecutor()
@@ -171,6 +185,65 @@ class Card(private val context: Context) {
         if (clean.isEmpty()) map.remove(rollNo) else map[rollNo] = clean
         memosFile.parentFile?.mkdirs()
         memosFile.writeText(map.entries.sortedBy { it.key }.joinToString("\n") { "${it.key}=${it.value}" })
+    }
+
+    fun recordFormat(fileNumber: Int, fmt: Int) {
+        if (fmt == 0) return
+        try {
+            formatsFile.parentFile?.mkdirs()
+            formatsFile.appendText("IMG_%04d=%d\n".format(Locale.US, fileNumber, fmt))
+        } catch (_: Throwable) { }
+    }
+
+    private fun lookupFormat(stem: String): Int {
+        if (!formatsFile.exists()) return 0
+        val prefix = "$stem="
+        val line = formatsFile.readLines().lastOrNull { it.startsWith(prefix) } ?: return 0
+        return line.removePrefix(prefix).trim().toIntOrNull() ?: 0
+    }
+
+    /** Applies aspect crop (6x6 / XPan), light leak, dust/scratches, and optional 35mm film rebate to freshly developed prints. */
+    fun postProcessRollPrints(
+        rollNo: Int,
+        targetFrame: Int,
+        lightLeakMode: Int,
+        dustMode: Int,
+        rebateBorder: Boolean,
+    ) {
+        val roll = parseLabRolls(Native.labRolls()).find { it.number == rollNo }
+        val filmName = roll?.filmName ?: "M-FILM"
+        val prints = parseRollPrints(Native.labRollPrints(rollNo)).filter {
+            it.jpegPath.isNotBlank() && (targetFrame <= 0 || it.no == targetFrame)
+        }
+        for (item in prints) {
+            val f = File(item.jpegPath)
+            if (!f.exists()) continue
+            val fmt = lookupFormat(f.nameWithoutExtension)
+            if (fmt == 0 && lightLeakMode == 0 && dustMode == 0 && !rebateBorder) continue
+            try {
+                val src = BitmapFactory.decodeFile(f.absolutePath, BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }) ?: continue
+                var cur = if (fmt != 0) cropToAspect(src, fmt).also { if (it !== src) src.recycle() } else src
+                if (lightLeakMode > 0 || dustMode > 0) {
+                    if (!cur.isMutable) {
+                        val mut = cur.copy(Bitmap.Config.ARGB_8888, true)
+                        cur.recycle()
+                        cur = mut
+                    }
+                    applyAnalogEffects(cur, rollNo * 1000 + item.no * 37, lightLeakMode, dustMode)
+                }
+                if (rebateBorder) {
+                    val framed = renderFilmRebate(cur, filmName, item.no)
+                    cur.recycle()
+                    cur = framed
+                }
+                FileOutputStream(f).use { cur.compress(Bitmap.CompressFormat.JPEG, 93, it) }
+                cur.recycle()
+            } catch (t: Throwable) {
+                Log.w(TAG, "postProcess ${f.name}: ${t.message}")
+            }
+        }
     }
 
     fun recordGps(fileNumber: Int, lat: Double, lon: Double) {
@@ -379,5 +452,149 @@ class Card(private val context: Context) {
     companion object {
         const val TAG = "mfilm"
         private val exportLock = Any()
+
+        fun cropToAspect(src: Bitmap, fmt: Int): Bitmap {
+            val w = src.width
+            val h = src.height
+            return when (fmt) {
+                1 -> { // 6x6 square (1:1)
+                    val s = minOf(w, h)
+                    Bitmap.createBitmap(src, (w - s) / 2, (h - s) / 2, s, s)
+                }
+                2 -> { // Hasselblad XPan (65:24 panoramic)
+                    if (w >= h) {
+                        val nh = (w * 24 / 65).coerceIn(1, h)
+                        Bitmap.createBitmap(src, 0, (h - nh) / 2, w, nh)
+                    } else {
+                        val nw = (h * 24 / 65).coerceIn(1, w)
+                        Bitmap.createBitmap(src, (w - nw) / 2, 0, nw, h)
+                    }
+                }
+                else -> src
+            }
+        }
+
+        fun applyAnalogEffects(bmp: Bitmap, seed: Int, lightLeakMode: Int, dustMode: Int) {
+            val rng = Random(seed.toLong())
+            val w = bmp.width.toFloat()
+            val h = bmp.height.toFloat()
+            val c = Canvas(bmp)
+
+            if (lightLeakMode > 0) {
+                val chance = if (lightLeakMode >= 2) 0.90f else 0.55f
+                if (rng.nextFloat() < chance) {
+                    val strength = if (lightLeakMode >= 2) 0.78f else 0.45f
+                    val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        xfermode = PorterDuffXfermode(PorterDuff.Mode.SCREEN)
+                    }
+                    val edge = rng.nextInt(4)
+                    val orange = (Math.round(255 * strength) shl 24) or 0xFF5518
+                    val amber = (Math.round(180 * strength) shl 24) or 0xFF9A28
+                    val red = (Math.round(140 * strength) shl 24) or 0xD91E2A
+                    val clear = 0x00000000
+                    val span = (0.18f + rng.nextFloat() * 0.24f)
+                    p.shader = when (edge) {
+                        0 -> LinearGradient(0f, 0f, w * span, h * 0.15f, intArrayOf(orange, amber, clear), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+                        1 -> LinearGradient(w, 0f, w * (1f - span), h * 0.15f, intArrayOf(red, orange, clear), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
+                        2 -> RadialGradient(w * (0.15f + rng.nextFloat() * 0.7f), h, h * (0.35f + rng.nextFloat() * 0.25f), intArrayOf(orange, red, clear), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
+                        else -> RadialGradient(w * (if (rng.nextBoolean()) 0.05f else 0.95f), h * 0.1f, w * 0.4f, intArrayOf(amber, orange, clear), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+                    }
+                    c.drawRect(0f, 0f, w, h, p)
+                }
+            }
+
+            if (dustMode > 0) {
+                val specks = if (dustMode >= 2) 55 else 20
+                val dustPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.FILL
+                }
+                val scale = (w / 1440f).coerceAtLeast(0.5f)
+                for (i in 0 until specks) {
+                    val alpha = (if (dustMode >= 2) 95 else 55) + rng.nextInt(80)
+                    dustPaint.color = (alpha shl 24) or 0xEFE6D8
+                    val x = rng.nextFloat() * w
+                    val y = rng.nextFloat() * h
+                    val r = (0.7f + rng.nextFloat() * 1.4f) * scale
+                    c.drawCircle(x, y, r, dustPaint)
+                }
+                val hairCount = if (dustMode >= 2) 6 else 2
+                val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = 0.9f * scale
+                }
+                for (i in 0 until hairCount) {
+                    val alpha = (if (dustMode >= 2) 90 else 50) + rng.nextInt(50)
+                    linePaint.color = (alpha shl 24) or 0xF5EFE6
+                    val x = rng.nextFloat() * w
+                    val y = rng.nextFloat() * h
+                    val len = (6f + rng.nextFloat() * 14f) * scale
+                    val dx = (rng.nextFloat() - 0.5f) * len
+                    val dy = (rng.nextFloat() - 0.5f) * len
+                    c.drawLine(x, y, x + dx, y + dy, linePaint)
+                }
+                if (dustMode >= 2) {
+                    // subtle vertical emulsion scanner scratch
+                    val sx = w * (0.1f + rng.nextFloat() * 0.8f)
+                    linePaint.color = 0x38F2E8D5
+                    linePaint.strokeWidth = 1.0f * scale
+                    c.drawLine(sx, 0f, sx, h, linePaint)
+                }
+            }
+        }
+
+        fun renderFilmRebate(src: Bitmap, filmName: String, frameNo: Int): Bitmap {
+            val w = src.width
+            val h = src.height
+            val sidePad = (w * 0.03f).toInt().coerceAtLeast(16)
+            val barH = (maxOf(w, h) * 0.115f).toInt().coerceAtLeast(56)
+            val outW = w + sidePad * 2
+            val outH = h + barH * 2
+            val out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+            val c = Canvas(out)
+            c.drawColor(0xFF0A0908.toInt())
+
+            // subtle warm film-base image frame
+            c.drawBitmap(src, sidePad.toFloat(), barH.toFloat(), null)
+
+            // 35mm sprocket holes along top and bottom borders
+            val holePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1F1D1B.toInt() }
+            val holeStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xFF332E29.toInt()
+                style = Paint.Style.STROKE
+                strokeWidth = (barH * 0.025f).coerceAtLeast(1f)
+            }
+            val holeW = barH * 0.42f
+            val holeH = barH * 0.44f
+            val pitch = holeW * 2.15f
+            val topHoleY = barH * 0.14f
+            val botHoleY = outH - barH * 0.14f - holeH
+            val rCorner = holeW * 0.22f
+            var x = sidePad.toFloat()
+            while (x + holeW <= outW - sidePad) {
+                val rTop = RectF(x, topHoleY, x + holeW, topHoleY + holeH)
+                val rBot = RectF(x, botHoleY, x + holeW, botHoleY + holeH)
+                c.drawRoundRect(rTop, rCorner, rCorner, holePaint)
+                c.drawRoundRect(rTop, rCorner, rCorner, holeStroke)
+                c.drawRoundRect(rBot, rCorner, rCorner, holePaint)
+                c.drawRoundRect(rBot, rCorner, rCorner, holeStroke)
+                x += pitch
+            }
+
+            // authentic amber-orange 35mm edge codes
+            val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xFFE8962C.toInt()
+                textSize = barH * 0.24f
+                typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                letterSpacing = 0.12f
+            }
+            val topText = "M-FILM  ${filmName.uppercase()}"
+            val botText = "▸ ${frameNo}A        ${frameNo}A"
+            c.drawText(topText, sidePad.toFloat(), barH * 0.87f, edgePaint)
+            c.drawText("${frameNo}", outW - sidePad - edgePaint.measureText("$frameNo"), barH * 0.87f, edgePaint)
+            c.drawText(botText, sidePad.toFloat(), outH - barH * 0.68f, edgePaint)
+            val rightMark = "SAFETY FILM 5063"
+            c.drawText(rightMark, outW - sidePad - edgePaint.measureText(rightMark), outH - barH * 0.68f, edgePaint)
+            return out
+        }
     }
 }

@@ -450,6 +450,7 @@ struct fos_dev
 
     /* the date in the corner (fos_dev_stamp): its mask at the screen's size and at the big print's */
     int stamp;
+    int grain_pct, hal_pct;
     uint8_t *smask[2];
     int sm_w[2], sm_h[2];
 
@@ -1939,6 +1940,8 @@ struct fos_dev *fos_dev_start(const char *cr2, const char *print, int film, int 
     d->frame = frame;
     d->look = fos_look_of(fos_films[d->film].key);
     d->seed = 12345u + (unsigned) frame * 7919u;
+    d->grain_pct = 100;
+    d->hal_pct = 100;
     d->white = WHITE_LEVEL;
     memcpy(d->xyz_cam, XYZ_CAM, sizeof(d->xyz_cam));
     d->stage = ST_OPEN;
@@ -2028,6 +2031,13 @@ void fos_dev_stamp(struct fos_dev *d, int on)
 void fos_dev_push(struct fos_dev *d, float ev)
 {
     if (d) d->push_ev = ev;
+}
+
+void fos_dev_recipe(struct fos_dev *d, int grain_pct, int hal_pct)
+{
+    if (!d) return;
+    d->grain_pct = grain_pct < 0 ? 0 : grain_pct > 200 ? 200 : grain_pct;
+    d->hal_pct = hal_pct < 0 ? 0 : hal_pct > 200 ? 200 : hal_pct;
 }
 
 int fos_dev_made(const struct fos_dev *d, int *w, int *h)
@@ -2415,7 +2425,10 @@ static void finish_row_with_buf(const struct fos_dev *d, int y, uint16_t *pos, u
     const struct fos_look *L = d->look;
     int pw = d->rows_axis_x ? d->ow : W, px0 = d->rows_axis_x ? d->ox0 : 0;
     int hal[3];
-    for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (L->halation * L->hal_tint[c] * 256) : 0;
+    static const float def_hal_tint[3] = { 1.0f, 0.35f, 0.12f };
+    float hal_amt = L->halation > 0 ? L->halation * d->hal_pct / 100.0f : (d->hal_pct > 100 ? (d->hal_pct - 100) * 0.0025f : 0.0f);
+    const float *ht = L->halation > 0 ? L->hal_tint : def_hal_tint;
+    for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (hal_amt * ht[c] * 256) : 0;
     int32_t grow[GW];
     if (d->glow)
     {
@@ -2430,7 +2443,7 @@ static void finish_row_with_buf(const struct fos_dev *d, int y, uint16_t *pos, u
     finish_pos(d->lin + 3 * (y * W + px0), pos, pw, 4096 - d->vig_y[y], d->vig_x,
                d->glow ? grow : 0, d->gx + px0, d->fx + px0, hal);
     finish_lut(pos, o + 3 * px0, pw);
-    int grain = (int) (L->grain * 255 * 0.55f * 256);
+    int grain = (int) (L->grain * 255 * 0.55f * 256 * d->grain_pct / 100.0f);
     if (grain) *seed = finish_grain(o + 3 * px0, pw, *seed, grain, L->mono);
 }
 
@@ -2659,7 +2672,10 @@ static __attribute__((noinline)) void big_finish_buf(const struct fos_dev *d, in
     expose_cam(d, t32, bcam, bw, a, b, ra, rb);
     expose_lin(d, bcam, blin, bw, 0, 0);
     int hal[3];
-    for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (L->halation * L->hal_tint[c] * 256) : 0;
+    static const float def_hal_tint[3] = { 1.0f, 0.35f, 0.12f };
+    float hal_amt = L->halation > 0 ? L->halation * d->hal_pct / 100.0f : (d->hal_pct > 100 ? (d->hal_pct - 100) * 0.0025f : 0.0f);
+    const float *ht = L->halation > 0 ? L->hal_tint : def_hal_tint;
+    for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (hal_amt * ht[c] * 256) : 0;
     int32_t grow[GW];
     if (d->glow)
     {
@@ -2670,7 +2686,7 @@ static __attribute__((noinline)) void big_finish_buf(const struct fos_dev *d, in
     }
     finish_pos(blin, bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal);
     finish_lut(bcam, rgb, bw);
-    int grain = (int) (L->grain * 255 * 0.55f * 256);
+    int grain = (int) (L->grain * 255 * 0.55f * 256 * d->grain_pct / 100.0f);
     if (grain) *seed = big_grain(rgb, bw, *seed, grain, L->mono);
     stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
 }
@@ -2945,7 +2961,7 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                         d->look = &bare;
                     }
 #endif
-                    if (d->look->halation > 0)
+                    if ((d->look->halation > 0 && d->hal_pct > 0) || d->hal_pct > 100)
                     {
                         d->glow = fos_port_alloc(GW * GH * 4);
                         if (d->glow) memset(d->glow, 0, GW * GH * 4);
