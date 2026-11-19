@@ -323,6 +323,166 @@ class Card(private val context: Context) {
         }
     }
 
+    /**
+     * Decodes a gallery photo oriented upright with ZERO cropping and ZERO aspect change.
+     * When maxLongEdge == 0, keeps exact original pixel dimensions.
+     * Returns (bitmap, origWidth to origHeight).
+     */
+    fun decodeOriginal(uri: Uri, maxLongEdge: Int = 0): Pair<Bitmap, Pair<Int, Int>>? {
+        return try {
+            val cr = context.contentResolver
+            val rot = cr.openInputStream(uri)?.use { stream ->
+                when (ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+                    ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                    ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                    ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                    else -> 0f
+                }
+            } ?: 0f
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            val origW = if (rot == 90f || rot == 270f) bounds.outHeight else bounds.outWidth
+            val origH = if (rot == 90f || rot == 270f) bounds.outWidth else bounds.outHeight
+            var sample = 1
+            if (maxLongEdge > 0) {
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxLongEdge) sample *= 2
+            }
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inMutable = true
+            }
+            val raw = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) } ?: return null
+            var upright = if (rot != 0f) {
+                val rotated = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, Matrix().apply { postRotate(rot) }, true)
+                if (rotated !== raw) raw.recycle()
+                if (!rotated.isMutable) rotated.copy(Bitmap.Config.ARGB_8888, true).also { rotated.recycle() } else rotated
+            } else {
+                if (!raw.isMutable) raw.copy(Bitmap.Config.ARGB_8888, true).also { raw.recycle() } else raw
+            }
+            if (maxLongEdge > 0 && maxOf(upright.width, upright.height) > maxLongEdge) {
+                val scale = maxLongEdge.toFloat() / maxOf(upright.width, upright.height)
+                val nw = (upright.width * scale).toInt().coerceAtLeast(2)
+                val nh = (upright.height * scale).toInt().coerceAtLeast(2)
+                val scaled = Bitmap.createScaledBitmap(upright, nw, nh, true)
+                if (scaled !== upright) upright.recycle()
+                upright = if (!scaled.isMutable) scaled.copy(Bitmap.Config.ARGB_8888, true).also { scaled.recycle() } else scaled
+            }
+            upright to (origW to origH)
+        } catch (t: Throwable) {
+            Log.e(TAG, "decodeOriginal", t)
+            null
+        }
+    }
+
+    /**
+     * Batch-grades and exports all imported photos with the exact same film tone,
+     * preserving each photo's exact original pixel dimensions (no crop / no resize).
+     */
+    fun exportImportedBatch(
+        uris: List<Uri>,
+        filmIdx: Int,
+        filmName: String,
+        pushEv: Float,
+        grainPct: Int,
+        halPct: Int,
+        lightLeakMode: Int,
+        dustMode: Int,
+        rebateBorder: Boolean,
+        onProgress: (Int, Int) -> Unit,
+    ): Int {
+        var saved = 0
+        val safeFilm = filmName.replace(Regex("[^A-Za-z0-9 _-]"), "").trim().ifBlank { "Film" }
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val folderName = "Imported $safeFilm"
+        val exifTags = listOf(
+            ExifInterface.TAG_DATETIME_ORIGINAL,
+            ExifInterface.TAG_DATETIME,
+            ExifInterface.TAG_F_NUMBER,
+            ExifInterface.TAG_EXPOSURE_TIME,
+            ExifInterface.TAG_ISO_SPEED_RATINGS,
+            ExifInterface.TAG_FOCAL_LENGTH,
+            ExifInterface.TAG_GPS_LATITUDE,
+            ExifInterface.TAG_GPS_LATITUDE_REF,
+            ExifInterface.TAG_GPS_LONGITUDE,
+            ExifInterface.TAG_GPS_LONGITUDE_REF,
+        )
+        uris.forEachIndexed { idx, uri ->
+            try {
+                val origExif = mutableMapOf<String, String>()
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        val ex = ExifInterface(stream)
+                        for (tag in exifTags) {
+                            ex.getAttribute(tag)?.let { origExif[tag] = it }
+                        }
+                    }
+                } catch (_: Throwable) { }
+
+                val decoded = decodeOriginal(uri, maxLongEdge = 0) ?: return@forEachIndexed
+                var bmp = decoded.first
+                val seed = 7919 * (idx + 1) + filmIdx * 97
+                Native.gradeBitmap(bmp, filmIdx, pushEv, grainPct, halPct, seed)
+                if (lightLeakMode > 0 || dustMode > 0) {
+                    applyAnalogEffects(bmp, seed, lightLeakMode, dustMode)
+                }
+                if (rebateBorder) {
+                    val framed = renderFilmRebate(bmp, filmName, idx + 1)
+                    bmp.recycle()
+                    bmp = framed
+                }
+
+                val tmp = File(context.cacheDir, "import_${stamp}_${idx + 1}.jpg")
+                FileOutputStream(tmp).use { bmp.compress(Bitmap.CompressFormat.JPEG, 94, it) }
+                bmp.recycle()
+
+                try {
+                    val outExif = ExifInterface(tmp.absolutePath)
+                    for ((k, v) in origExif) outExif.setAttribute(k, v)
+                    outExif.setAttribute(ExifInterface.TAG_MAKE, "M-Film")
+                    outExif.setAttribute(ExifInterface.TAG_MODEL, filmName)
+                    outExif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "M-Film · $filmName")
+                    outExif.setAttribute(ExifInterface.TAG_USER_COMMENT, "Film: $filmName")
+                    if (ExifInterface.TAG_DATETIME_ORIGINAL !in origExif) {
+                        val nowStr = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
+                        outExif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, nowStr)
+                        outExif.setAttribute(ExifInterface.TAG_DATETIME, nowStr)
+                    }
+                    outExif.saveAttributes()
+                } catch (_: Throwable) { }
+
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, "MFilm_${safeFilm.replace(' ', '_')}_${stamp}_%02d.jpg".format(idx + 1))
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/M-Film/$folderName")
+                    put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val outUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                if (outUri != null) {
+                    try {
+                        resolver.openOutputStream(outUri)?.use { out -> tmp.inputStream().use { it.copyTo(out) } }
+                            ?: throw Exception("no stream")
+                        values.clear()
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        resolver.update(outUri, values, null, null)
+                        saved++
+                    } catch (t: Throwable) {
+                        resolver.delete(outUri, null, null)
+                        Log.e(TAG, "exportImportedBatch write", t)
+                    }
+                }
+                tmp.delete()
+            } catch (t: Throwable) {
+                Log.e(TAG, "exportImportedBatch #$idx", t)
+            }
+            onProgress(idx + 1, uris.size)
+        }
+        return saved
+    }
+
     fun saveWidgetCanister(filmIdx: Int, exposures: Int) {
         try {
             if (filmIdx < 0) return

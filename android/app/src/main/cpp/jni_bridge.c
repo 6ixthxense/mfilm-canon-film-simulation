@@ -255,3 +255,18 @@ JNIEXPORT jint JNICALL FN(makeCr2)(JNIEnv *env, jclass cls, jstring path, jintAr
     (*env)->ReleaseStringUTFChars(env, path, p);
     return r;
 }
+
+JNIEXPORT jboolean JNICALL FN(gradeBitmap)(
+    JNIEnv *env, jclass cls, jobject bitmap, jint film, jfloat pushEv, jint grainPct, jint halPct, jint seed)
+{
+    AndroidBitmapInfo info;
+    void *px;
+    if (AndroidBitmap_getInfo(env, bitmap, &info) < 0 ||
+        info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+        AndroidBitmap_lockPixels(env, bitmap, &px) < 0)
+        return JNI_FALSE;
+    int ok = mf_grade_rgba((uint32_t *) px, (int) info.width, (int) info.height, (int) (info.stride / 4),
+                           film, pushEv, grainPct, halPct, (unsigned) seed);
+    AndroidBitmap_unlockPixels(env, bitmap);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}

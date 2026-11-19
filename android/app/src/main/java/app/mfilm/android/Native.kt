@@ -61,4 +61,5 @@ object Native {
     @JvmStatic external fun devError(): String
     @JvmStatic external fun devClose()
     @JvmStatic external fun makeCr2(path: String, argb: IntArray, w: Int, h: Int, seed: Int): Int
+    @JvmStatic external fun gradeBitmap(bitmap: Bitmap, film: Int, pushEv: Float, grainPct: Int, halPct: Int, seed: Int): Boolean
 }

@@ -3146,3 +3146,231 @@ int fos_dev_preview(const struct fos_dev *d, uint8_t *lum, int w, int h)
     }
     return 1;
 }
+
+#ifdef FOS_DEV_RAWIN
+/* ---------------------------------------------------------------- direct RGBA film grading (import editor) */
+
+#define GRADE_GW 180
+#define GRADE_GH 120
+
+struct grade_ctx {
+    uint32_t *rgba;
+    int w, h, stride_px;
+    const uint16_t *srgb2lin;
+    const int16_t *vig_x, *vig_y;
+    const int32_t *glow;
+    int hal[3];
+    int grain, mono;
+    unsigned seed;
+};
+
+static void grade_rows_range(const struct grade_ctx *c, int y0, int y1)
+{
+    const uint16_t *cin = tab->cin;
+    const uint8_t (*lut)[3] = tab->lut;
+    const int w = c->w, h = c->h;
+    const int h0 = c->hal[0], h1 = c->hal[1], h2 = c->hal[2];
+    const int has_glow = c->glow != 0;
+    const int gw = GRADE_GW, gh = GRADE_GH;
+    uint8_t *row_rgb = (uint8_t *) fos_port_alloc(w * 3);
+    if (!row_rgb) return;
+
+    for (int y = y0; y < y1; y++)
+    {
+        uint32_t *px = c->rgba + (size_t) y * c->stride_px;
+        int vy = 4096 - c->vig_y[y];
+        const int32_t *g0 = 0, *g1 = 0;
+        int fy = 0;
+        if (has_glow)
+        {
+            float gyf = (y + 0.5f) * gh / h - 0.5f;
+            int gy = gyf < 0 ? 0 : (int) gyf;
+            if (gy >= gh - 1) { gy = gh - 2; fy = 8; }
+            else fy = (int) ((gyf - gy) * 8.0f + 0.5f);
+            if (fy < 0) fy = 0; else if (fy > 8) fy = 8;
+            g0 = c->glow + gy * gw;
+            g1 = g0 + gw;
+        }
+        uint8_t *o = row_rgb;
+        for (int x = 0; x < w; x++, o += 3)
+        {
+            uint32_t p = px[x];
+            int vig = vy - c->vig_x[x];
+            int r = (c->srgb2lin[p & 0xFF] * vig) >> 12;
+            int g = (c->srgb2lin[(p >> 8) & 0xFF] * vig) >> 12;
+            int b = (c->srgb2lin[(p >> 16) & 0xFF] * vig) >> 12;
+            if (has_glow)
+            {
+                int gx = (int) ((long long) x * (gw - 1) / (w > 1 ? w - 1 : 1));
+                int gl = (g0[gx] * (8 - fy) + g1[gx] * fy) >> 6;
+                r += (gl * h0) >> 8;
+                g += (gl * h1) >> 8;
+                b += (gl * h2) >> 8;
+            }
+            if (r > 65535) r = 65535;
+            if (g > 65535) g = 65535;
+            if (b > 65535) b = 65535;
+            int pr = cin_pos(cin, r);
+            int pg = cin_pos(cin, g);
+            int pb = cin_pos(cin, b);
+            lut_apply(lut, pr, pg, pb, o);
+        }
+        if (c->grain)
+        {
+            unsigned s = c->seed ^ ((unsigned) y * 2654435761u);
+            big_grain(row_rgb, w, s, c->grain, c->mono);
+        }
+        o = row_rgb;
+        for (int x = 0; x < w; x++, o += 3)
+        {
+            px[x] = (uint32_t) o[0] | ((uint32_t) o[1] << 8) | ((uint32_t) o[2] << 16) | 0xFF000000u;
+        }
+    }
+    fos_port_free(row_rgb);
+}
+
+#ifdef FOS_MULTITHREAD
+static pthread_mutex_t grade_lock = PTHREAD_MUTEX_INITIALIZER;
+static void mt_grade_fn(void *arg, int tid, int nthreads)
+{
+    const struct grade_ctx *c = (const struct grade_ctx *) arg;
+    int y0 = c->h * tid / nthreads;
+    int y1 = c->h * (tid + 1) / nthreads;
+    if (y0 < y1) grade_rows_range(c, y0, y1);
+}
+#endif
+
+int fos_dev_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
+                       float push_ev, int grain_pct, int hal_pct, unsigned seed)
+{
+    if (!rgba || w < 2 || h < 2 || stride_px < w) return 0;
+#ifdef FOS_MULTITHREAD
+    pthread_mutex_lock(&grade_lock);
+#endif
+    if (!tables_ready())
+    {
+#ifdef FOS_MULTITHREAD
+        pthread_mutex_unlock(&grade_lock);
+#endif
+        return 0;
+    }
+    film = fos_clamp(film, 0, fos_nfilms - 1);
+    const struct fos_look *L = fos_look_of(fos_films[film].key);
+    if (!table_load(L, film))
+    {
+#ifdef FOS_MULTITHREAD
+        pthread_mutex_unlock(&grade_lock);
+#endif
+        return 0;
+    }
+
+    grain_pct = grain_pct < 0 ? 0 : grain_pct > 200 ? 200 : grain_pct;
+    hal_pct = hal_pct < 0 ? 0 : hal_pct > 200 ? 200 : hal_pct;
+    float mult = 4096.0f * 0.66f * exp2f(L->ev + push_ev);
+
+    uint16_t srgb2lin[256];
+    for (int i = 0; i < 256; i++)
+    {
+        float v = i / 255.0f;
+        float lin = v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f);
+        int q = (int) (lin * mult + 0.5f);
+        srgb2lin[i] = (uint16_t) (q < 0 ? 0 : q > 65535 ? 65535 : q);
+    }
+
+    int16_t *vig_x = (int16_t *) fos_port_alloc(w * 2);
+    int16_t *vig_y = (int16_t *) fos_port_alloc(h * 2);
+    if (!vig_x || !vig_y)
+    {
+        fos_port_free(vig_x); fos_port_free(vig_y);
+#ifdef FOS_MULTITHREAD
+        pthread_mutex_unlock(&grade_lock);
+#endif
+        return 0;
+    }
+    for (int x = 0; x < w; x++) { float t = 2.0f * x / (w - 1) - 1; vig_x[x] = (int16_t) (0.06f * t * t * 4096); }
+    for (int y = 0; y < h; y++) { float t = 2.0f * y / (h - 1) - 1; vig_y[y] = (int16_t) (0.06f * t * t * 4096); }
+
+    int32_t *glow = 0;
+    static const float def_hal_tint[3] = { 1.0f, 0.35f, 0.12f };
+    float hal_amt = L->halation > 0 ? L->halation * hal_pct / 100.0f : (hal_pct > 100 ? (hal_pct - 100) * 0.0025f : 0.0f);
+    const float *ht = L->halation > 0 ? L->hal_tint : def_hal_tint;
+    if (hal_amt > 0.0001f)
+    {
+        glow = (int32_t *) fos_port_alloc(GRADE_GW * GRADE_GH * 4);
+        if (glow)
+        {
+            memset(glow, 0, GRADE_GW * GRADE_GH * 4);
+            int thr = (int) (L->hal_thr * 4096);
+            int step_y = h > 480 ? h / 240 : 1;
+            int step_x = w > 720 ? w / 360 : 1;
+            int counts[GRADE_GW * GRADE_GH];
+            memset(counts, 0, sizeof(counts));
+            for (int y = 0; y < h; y += step_y)
+            {
+                int gy = (int) ((long long) y * GRADE_GH / h);
+                if (gy >= GRADE_GH) gy = GRADE_GH - 1;
+                const uint32_t *px = rgba + (size_t) y * stride_px;
+                for (int x = 0; x < w; x += step_x)
+                {
+                    int gx = (int) ((long long) x * GRADE_GW / w);
+                    if (gx >= GRADE_GW) gx = GRADE_GW - 1;
+                    uint32_t p = px[x];
+                    int r = srgb2lin[p & 0xFF], g = srgb2lin[(p >> 8) & 0xFF], b = srgb2lin[(p >> 16) & 0xFF];
+                    int l = (871 * r + 2929 * g + 296 * b) >> 12;
+                    int idx = gy * GRADE_GW + gx;
+                    if (l > thr) glow[idx] += l - thr;
+                    counts[idx]++;
+                }
+            }
+            for (int i = 0; i < GRADE_GW * GRADE_GH; i++)
+                if (counts[i] > 0) glow[i] /= counts[i];
+            int32_t tmp[GRADE_GW > GRADE_GH ? GRADE_GW : GRADE_GH];
+            for (int pass = 0; pass < 2; pass++)
+            {
+                for (int y = 0; y < GRADE_GH; y++)
+                {
+                    int32_t *r = glow + y * GRADE_GW;
+                    for (int x = 0; x < GRADE_GW; x++)
+                        tmp[x] = (r[x > 0 ? x - 1 : 0] + 2 * r[x] + r[x < GRADE_GW - 1 ? x + 1 : GRADE_GW - 1]) >> 2;
+                    memcpy(r, tmp, sizeof(int32_t) * GRADE_GW);
+                }
+                for (int x = 0; x < GRADE_GW; x++)
+                {
+                    for (int y = 0; y < GRADE_GH; y++)
+                        tmp[y] = (glow[(y > 0 ? y - 1 : 0) * GRADE_GW + x] + 2 * glow[y * GRADE_GW + x] + glow[(y < GRADE_GH - 1 ? y + 1 : GRADE_GH - 1) * GRADE_GW + x]) >> 2;
+                    for (int y = 0; y < GRADE_GH; y++) glow[y * GRADE_GW + x] = tmp[y];
+                }
+            }
+        }
+    }
+
+    struct grade_ctx ctx;
+    ctx.rgba = rgba;
+    ctx.w = w;
+    ctx.h = h;
+    ctx.stride_px = stride_px;
+    ctx.srgb2lin = srgb2lin;
+    ctx.vig_x = vig_x;
+    ctx.vig_y = vig_y;
+    ctx.glow = glow;
+    for (int i = 0; i < 3; i++) ctx.hal[i] = glow ? (int) (hal_amt * ht[i] * 256) : 0;
+    ctx.grain = (int) (L->grain * 255 * 0.55f * 256 * grain_pct / 100.0f);
+    ctx.mono = L->mono;
+    ctx.seed = seed ? seed : 12345u;
+
+#ifdef FOS_MULTITHREAD
+    if (h >= 64) mt_run(mt_grade_fn, &ctx, MT_THREADS);
+    else grade_rows_range(&ctx, 0, h);
+#else
+    grade_rows_range(&ctx, 0, h);
+#endif
+
+    fos_port_free(glow);
+    fos_port_free(vig_x);
+    fos_port_free(vig_y);
+#ifdef FOS_MULTITHREAD
+    pthread_mutex_unlock(&grade_lock);
+#endif
+    return 1;
+}
+#endif

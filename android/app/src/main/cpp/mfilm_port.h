@@ -59,6 +59,8 @@ const char *mf_card(void);
 /* a CR2 shaped like the EOS M's (the whole 18 MP sensor) from a photo:
  * rgba as Android's ARGB_8888 ints (0xAARRGGBB), sRGB. 0 on success */
 int  mf_make_cr2(const char *path, const uint32_t *argb, int w, int h, int seed);
+int  mf_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
+                   float push_ev, int grain_pct, int hal_pct, unsigned seed);
 
 extern void (*mf_log_fn)(const char *msg);
 

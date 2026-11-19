@@ -9,17 +9,22 @@ import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Typeface
+import android.net.Uri
 import android.view.HapticFeedbackConstants
 import android.widget.EditText
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import java.io.FileOutputStream
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,13 +39,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed as lazyItemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -146,10 +154,11 @@ private fun formatMb(bytes: Long): String {
  */
 @Composable
 fun DarkroomScreen(
-    pendingImportCount: Int,
+    pendingImportUris: List<Uri>,
     importing: Boolean,
+    importProgress: String,
     onRequestImport: () -> Unit,
-    onConfirmImport: (Int, Int, Int, Int, Int) -> Unit,
+    onConfirmImport: (Int, String, Float, Int, Int, Int, Int, Boolean) -> Unit,
     onCancelImport: () -> Unit,
     onDevelop: (Int, Int, Int, Int, Int) -> Unit,
     onCancel: () -> Unit,
@@ -172,7 +181,17 @@ fun DarkroomScreen(
     var pickSwapFilm by remember { mutableStateOf(false) }
     var swapFilmIdx by remember { mutableIntStateOf(-1) }
     val catalog = remember { loadFilmCatalog() }
-    var importFilmIdx by remember { mutableIntStateOf(0) }
+
+    if (pendingImportUris.isNotEmpty() && !importing) {
+        ImportEditorScreen(
+            uris = pendingImportUris,
+            catalog = catalog,
+            card = card,
+            onSave = onConfirmImport,
+            onCancel = onCancelImport,
+        )
+        return
+    }
 
     fun nextRecipe(cur: Int): Int {
         val idx = RECIPE_STEPS.indexOf(cur)
@@ -222,7 +241,7 @@ fun DarkroomScreen(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Key("← Back", color = SAFELIGHT, onClick = onBack)
             Label("DARKROOM · ${formatMb(rawBytes)}", size = 14.sp, color = SAFELIGHT)
-            if (!DevelopState.running && !importing && pendingImportCount == 0) {
+            if (!DevelopState.running && !importing && pendingImportUris.isEmpty()) {
                 Key("Import", color = Look.Amber, onClick = onRequestImport)
             } else {
                 Spacer(Modifier.width(56.dp))
@@ -236,83 +255,7 @@ fun DarkroomScreen(
                 Modifier.weight(1f).fillMaxWidth().border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(4.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Label("PREPARING IMPORTED ROLL…", size = 13.sp, color = SAFELIGHT)
-            }
-        } else if (pendingImportCount > 0) {
-            // Inline film picker for imported gallery photos
-            Label("IMPORT $pendingImportCount PHOTO${if (pendingImportCount == 1) "" else "S"}  ·  PICK FILM", size = 12.sp, color = Look.Amber)
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(catalog, key = { it.index }) { f ->
-                    val picked = f.index == importFilmIdx
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .background(if (picked) Color(0xFF1A0705) else Color(0xFF0A0303), RoundedCornerShape(3.dp))
-                            .border(1.dp, if (picked) Look.Amber else SAFELIGHT_DIM, RoundedCornerShape(3.dp))
-                            .clickable {
-                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                                importFilmIdx = f.index
-                            }
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column {
-                            Label(f.name, size = 13.sp, color = if (picked) Look.Amber else SAFELIGHT)
-                            if (f.note.isNotBlank()) Label(f.note, size = 10.sp, color = SAFELIGHT_DIM)
-                        }
-                        Label("ISO ${f.iso}", size = 11.sp, color = SAFELIGHT_DIM)
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Key("GRN $grainPct%", modifier = Modifier.defaultMinSize(72.dp, 36.dp), color = if (grainPct != 100) Look.Amber else SAFELIGHT_DIM) {
-                    grainPct = nextRecipe(grainPct)
-                }
-                Key("HAL $halPct%", modifier = Modifier.defaultMinSize(72.dp, 36.dp), color = if (halPct != 100) Look.Amber else SAFELIGHT_DIM) {
-                    halPct = nextRecipe(halPct)
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Row(
-                        Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        PRINT_SIZES.forEachIndexed { idx, (label, sz) ->
-                            if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
-                            Key(label, modifier = Modifier.defaultMinSize(30.dp, 40.dp), color = if (printSize == sz) SAFELIGHT else SAFELIGHT_DIM) { printSize = sz }
-                        }
-                    }
-                    Row(
-                        Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        PUSH_STOPS.forEachIndexed { idx, (label, ev) ->
-                            if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
-                            Key(label, modifier = Modifier.defaultMinSize(30.dp, 40.dp), color = if (pushStops == ev) SAFELIGHT else SAFELIGHT_DIM) { pushStops = ev }
-                        }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Key("Cancel", modifier = Modifier.defaultMinSize(44.dp, 42.dp), color = SAFELIGHT_DIM, onClick = onCancelImport)
-                    Box(
-                        Modifier
-                            .defaultMinSize(84.dp, 44.dp)
-                            .border(1.dp, Look.Amber, RoundedCornerShape(3.dp))
-                            .clickable {
-                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                                onConfirmImport(importFilmIdx, printSize, pushStops, grainPct, halPct)
-                            }
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Label("Develop", size = 13.sp, color = Look.Amber)
-                    }
-                }
+                Label(importProgress.ifBlank { "GRADING & SAVING ORIGINAL SIZE…" }, size = 13.sp, color = Look.Amber)
             }
         } else if (pickSwapFilm) {
             // Inline film-swap picker for Re-develop with different film stock
@@ -585,6 +528,329 @@ fun DarkroomScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+private val EDITOR_GROUPS = listOf("ALL", "★", "CLR", "SLD", "B&W", "CINE")
+private val EDITOR_EVS = listOf(-1.0f, -0.5f, 0f, 0.5f, 1.0f)
+
+/**
+ * Interactive Darkroom Import Editor (only for imported gallery photos).
+ * Live real-LUT preview across all 68 film stocks, hold-for-before compare,
+ * multi-photo batch preview strip, unified tone controls, and full original-resolution export.
+ */
+@Composable
+private fun ImportEditorScreen(
+    uris: List<Uri>,
+    catalog: List<FilmEntry>,
+    card: Card,
+    onSave: (Int, String, Float, Int, Int, Int, Int, Boolean) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val prefs = remember { context.getSharedPreferences("MainActivity", Context.MODE_PRIVATE) }
+    val favKeys = remember { prefs.getStringSet("fav_films", emptySet())?.toSet() ?: emptySet() }
+
+    var activeIdx by remember { mutableIntStateOf(0) }
+    var filmIdx by remember { mutableIntStateOf(0) }
+    var groupTab by remember { mutableIntStateOf(0) }
+    var pushEv by remember { mutableFloatStateOf(0f) }
+    var grainPct by remember { mutableIntStateOf(100) }
+    var halPct by remember { mutableIntStateOf(100) }
+    var lightLeak by remember { mutableIntStateOf(0) }
+    var dust by remember { mutableIntStateOf(0) }
+    var rebate by remember { mutableStateOf(false) }
+    var holdingBefore by remember { mutableStateOf(false) }
+
+    val filteredFilms = remember(catalog, groupTab, favKeys) {
+        when (groupTab) {
+            0 -> catalog
+            1 -> catalog.filter { it.key in favKeys }.ifEmpty { catalog }
+            else -> catalog.filter { it.group == groupTab - 2 }
+        }
+    }
+    val selectedFilm = catalog.find { it.index == filmIdx } ?: catalog.firstOrNull()
+    val activeUri = uris.getOrElse(activeIdx) { uris.first() }
+
+    // Decode preview-sized upright copy (keeping original aspect ratio) + report exact original dimensions
+    val basePair by produceState<Pair<Bitmap, Pair<Int, Int>>?>(initialValue = null, key1 = activeUri) {
+        value = withContext(Dispatchers.IO) {
+            card.decodeOriginal(activeUri, maxLongEdge = 960)
+        }
+    }
+
+    // Grade live preview through real C 3D LUT + halation + grain + analog effects on Dispatchers.IO
+    val gradeKey = listOf(basePair, filmIdx, pushEv, grainPct, halPct, lightLeak, dust, rebate)
+    val gradedBmp by produceState<Bitmap?>(initialValue = null, key1 = gradeKey) {
+        val base = basePair?.first ?: return@produceState
+        val fName = selectedFilm?.name ?: "M-FILM"
+        value = withContext(Dispatchers.IO) {
+            val copy = base.copy(Bitmap.Config.ARGB_8888, true)
+            val seed = 7919 * (activeIdx + 1) + filmIdx * 97
+            Native.gradeBitmap(copy, filmIdx, pushEv, grainPct, halPct, seed)
+            if (lightLeak > 0 || dust > 0) {
+                Card.applyAnalogEffects(copy, seed, lightLeak, dust)
+            }
+            if (rebate) {
+                val framed = Card.renderFilmRebate(copy, fName, activeIdx + 1)
+                copy.recycle()
+                framed
+            } else copy
+        }
+    }
+
+    fun nextRecipe(cur: Int): Int {
+        val idx = RECIPE_STEPS.indexOf(cur)
+        return RECIPE_STEPS[(idx + 1) % RECIPE_STEPS.size]
+    }
+
+    fun nextEv(cur: Float): Float {
+        val idx = EDITOR_EVS.indexOfFirst { abs(it - cur) < 0.05f }
+        return EDITOR_EVS[(idx + 1) % EDITOR_EVS.size]
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Look.Body)
+            .windowInsetsPadding(WindowInsets.displayCutout)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        // Top bar: Cancel · Film & Original Resolution · Save All
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Key("← Cancel", modifier = Modifier.defaultMinSize(54.dp, 42.dp), color = Look.Dim, onClick = onCancel)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                val countTag = if (uris.size > 1) " · ${activeIdx + 1}/${uris.size}" else ""
+                Label("${selectedFilm?.name ?: "FILM"}$countTag", size = 13.sp, color = Look.Ivory)
+                val dims = basePair?.second
+                if (dims != null) {
+                    Label("${dims.first}×${dims.second} · ORIGINAL SIZE", size = 9.sp, color = Look.Dim)
+                }
+            }
+            Box(
+                Modifier
+                    .defaultMinSize(78.dp, 40.dp)
+                    .background(Look.Plate, RoundedCornerShape(3.dp))
+                    .border(1.dp, Look.Amber, RoundedCornerShape(3.dp))
+                    .clickable {
+                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        onSave(filmIdx, selectedFilm?.name ?: "M-Film", pushEv, grainPct, halPct, lightLeak, dust, rebate)
+                    }
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Label(if (uris.size > 1) "SAVE (${uris.size})" else "SAVE", size = 12.sp, color = Look.Amber)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Live LUT preview canvas (press & hold for Before/After)
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(Color.Black)
+                .border(0.5.dp, Look.Plate)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown()
+                        holdingBefore = true
+                        waitForUpOrCancellation()
+                        holdingBefore = false
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            val shown = if (holdingBefore) basePair?.first else (gradedBmp ?: basePair?.first)
+            if (shown != null) {
+                Image(
+                    shown.asImageBitmap(),
+                    contentDescription = "Film preview",
+                    modifier = Modifier.fillMaxSize().padding(4.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Label("LOADING PREVIEW…", size = 11.sp, color = Look.Dim)
+            }
+            if (holdingBefore) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp)
+                        .background(Color(0xCC0A0A09), RoundedCornerShape(2.dp))
+                        .border(0.5.dp, Look.Brass, RoundedCornerShape(2.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    Label("ORIGINAL (BEFORE)", size = 10.sp, color = Look.Amber)
+                }
+            } else {
+                Label(
+                    "HOLD FOR BEFORE",
+                    size = 9.sp,
+                    color = Look.Dim.copy(alpha = 0.7f),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
+                )
+            }
+        }
+
+        // Batch thumbnail strip when multiple photos are selected
+        if (uris.size > 1) {
+            Spacer(Modifier.height(8.dp))
+            LazyRow(
+                Modifier.fillMaxWidth().height(48.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                lazyItemsIndexed(uris, key = { idx, u -> "$idx:$u" }) { idx, uri ->
+                    val thumbKey = "impthumb:$uri"
+                    val thumb by produceState<Bitmap?>(initialValue = BitmapCache.get(thumbKey), key1 = thumbKey) {
+                        val cached = BitmapCache.get(thumbKey)
+                        if (cached != null) {
+                            value = cached
+                            return@produceState
+                        }
+                        value = withContext(Dispatchers.IO) {
+                            card.decodeOriginal(uri, maxLongEdge = 128)?.first?.also { BitmapCache.put(thumbKey, it) }
+                        }
+                    }
+                    val active = idx == activeIdx
+                    Box(
+                        Modifier
+                            .size(44.dp)
+                            .background(Look.Window)
+                            .border(if (active) 1.5.dp else 0.5.dp, if (active) Look.Amber else Look.Plate)
+                            .clickable {
+                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                activeIdx = idx
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (thumb != null) {
+                            Image(thumb!!.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        } else {
+                            Label("${idx + 1}", size = 10.sp, color = Look.Dim)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Unified tone adjustments strip (applies identically to all selected photos)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .border(0.5.dp, Look.Plate, RoundedCornerShape(3.dp))
+                .background(Look.Window, RoundedCornerShape(3.dp))
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val evText = when {
+                pushEv > 0.05f -> "EV +%.1f".format(pushEv)
+                pushEv < -0.05f -> "EV %.1f".format(pushEv)
+                else -> "EV 0"
+            }
+            Key(evText, modifier = Modifier.defaultMinSize(54.dp, 38.dp), color = if (abs(pushEv) > 0.05f) Look.Amber else Look.Ivory) {
+                pushEv = nextEv(pushEv)
+            }
+            Key("GRN $grainPct%", modifier = Modifier.defaultMinSize(66.dp, 38.dp), color = if (grainPct != 100) Look.Amber else Look.Ivory) {
+                grainPct = nextRecipe(grainPct)
+            }
+            Key("HAL $halPct%", modifier = Modifier.defaultMinSize(66.dp, 38.dp), color = if (halPct != 100) Look.Amber else Look.Ivory) {
+                halPct = nextRecipe(halPct)
+            }
+            Key(
+                when (lightLeak) { 1 -> "LEAK 1"; 2 -> "LEAK 2"; else -> "LEAK" },
+                modifier = Modifier.defaultMinSize(54.dp, 38.dp),
+                color = if (lightLeak > 0) Look.Amber else Look.Dim,
+            ) { lightLeak = (lightLeak + 1) % 3 }
+            Key(
+                when (dust) { 1 -> "DUST 1"; 2 -> "DUST 2"; else -> "DUST" },
+                modifier = Modifier.defaultMinSize(54.dp, 38.dp),
+                color = if (dust > 0) Look.Amber else Look.Dim,
+            ) { dust = (dust + 1) % 3 }
+            Key("35MM", modifier = Modifier.defaultMinSize(48.dp, 38.dp), color = if (rebate) Look.Amber else Look.Dim) {
+                rebate = !rebate
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        // Film category filter tabs
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            EDITOR_GROUPS.forEachIndexed { idx, name ->
+                Key(
+                    name,
+                    modifier = Modifier.defaultMinSize(40.dp, 34.dp),
+                    color = if (idx == groupTab) Look.Amber else Look.Dim,
+                ) { groupTab = idx }
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        // Horizontal 68-film preset strip with sample tone swatches
+        LazyRow(
+            Modifier.fillMaxWidth().height(92.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            items(filteredFilms, key = { it.index }) { f ->
+                val picked = f.index == filmIdx
+                val swatchKey = "sample:${f.key}"
+                val swatch by produceState<Bitmap?>(initialValue = BitmapCache.get(swatchKey), key1 = f.key) {
+                    val cached = BitmapCache.get(swatchKey)
+                    if (cached != null) {
+                        value = cached
+                        return@produceState
+                    }
+                    value = withContext(Dispatchers.IO) {
+                        runCatching {
+                            context.assets.open("samples/${f.key}.jpg").use { BitmapFactory.decodeStream(it) }
+                        }.getOrNull()?.also { BitmapCache.put(swatchKey, it) }
+                    }
+                }
+                Column(
+                    Modifier
+                        .width(86.dp)
+                        .background(Look.Window, RoundedCornerShape(3.dp))
+                        .border(if (picked) 1.5.dp else 0.5.dp, if (picked) Look.Amber else Look.Plate, RoundedCornerShape(3.dp))
+                        .clickable {
+                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            filmIdx = f.index
+                        }
+                        .padding(4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    if (swatch != null) {
+                        Image(
+                            swatch!!.asImageBitmap(),
+                            contentDescription = f.name,
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        Box(Modifier.fillMaxWidth().height(50.dp).background(Look.Plate))
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Label(f.name.take(12), size = 9.sp, color = if (picked) Look.Amber else Look.Ivory)
+                    Label("ISO ${f.iso}", size = 8.sp, color = Look.Dim)
                 }
             }
         }
