@@ -236,8 +236,13 @@ static void log_append(const char *line)
 
 static void load_roll(int film, int exposures)
 {
+    struct fos_lab_roll existing[32];
+    int nexisting = fos_lab_scan(existing, 32);
+    int max_no = roll.number;
+    for (int i = 0; i < nexisting; i++)
+        if (existing[i].number > max_no) max_no = existing[i].number;
     roll.loaded = 1;
-    roll.number++;
+    roll.number = max_no + 1;
     roll.film = film;
     roll.exposures = exposures;
     roll.shot = 0;
@@ -559,6 +564,49 @@ int mf_lab_delete(int roll_no, int whole)
 {
     struct fos_lab_frame frames[FOS_MAX_FRAMES];
     return fos_lab_delete(roll_no, whole, frames);
+}
+
+int mf_lab_has_raws(int roll_no)
+{
+    struct fos_lab_frame frames[64];
+    int n = fos_lab_frames(roll_no, frames, 64);
+    for (int i = 0; i < n; i++)
+        if (!frames[i].missing) return 1;
+    return 0;
+}
+
+int mf_import_roll(int film, int count, int *out_first_file)
+{
+    if (film < 0 || film >= fos_nfilms || count <= 0) return -1;
+    if (count > 36) count = 36;
+    pthread_mutex_lock(&state_lock);
+    struct fos_lab_roll existing[32];
+    int nexisting = fos_lab_scan(existing, 32);
+    int max_no = roll.number;
+    for (int i = 0; i < nexisting; i++)
+        if (existing[i].number > max_no) max_no = existing[i].number;
+    int new_roll = max_no + 1;
+    int first_file = file_no + 1;
+    file_no += count;
+
+    char when[20], path[700];
+    clock_str(when, sizeof(when), 1);
+    snprintf(path, sizeof(path), "%s/ROLL_%03d.TXT", dcim, new_roll);
+    FILE *f = fopen(path, "wb");
+    if (!f)
+    {
+        pthread_mutex_unlock(&state_lock);
+        return -1;
+    }
+    fprintf(f, "# ML film mode roll log (imported)\nroll = %03d\nfilm = %s\nexposures = %d\nloaded = %s:00\n\n",
+            new_roll, fos_films[film].key, count, when);
+    for (int i = 0; i < count; i++)
+        fprintf(f, "%d  IMG_%04d.CR2  %s:00  f/2.8\n", i + 1, first_file + i, when);
+    fclose(f);
+    save_state();
+    pthread_mutex_unlock(&state_lock);
+    if (out_first_file) *out_first_file = first_file;
+    return new_roll;
 }
 
 /* ---------------------------------------------------------------- darkroom session */

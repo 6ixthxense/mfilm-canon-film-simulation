@@ -9,20 +9,31 @@ import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
 import android.graphics.Matrix
+import android.graphics.Rect
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.location.Location
+import android.location.LocationManager
 import android.media.AudioAttributes
 import android.media.SoundPool
+import android.net.Uri
 import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.Range
 import android.view.Choreographer
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
@@ -49,11 +60,16 @@ import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.util.concurrent.Executors
+import kotlin.math.PI
+import kotlin.math.atan2
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -92,20 +108,49 @@ class MainActivity : ComponentActivity() {
     private var volumeDown = false
     private var timerRunnable: Runnable? = null
     private var doubleFirst: Bitmap? = null
+    private var halfFirst: Bitmap? = null
     private var pendingDoubleBlend: Bitmap? = null
     private var lastMeterUpdateMs = 0L
+    private var lastTiltMs = 0L
+    private var lastWidgetFilm = ""
+    private var expRangeNs: Range<Long>? = null
+    private var isoRange: Range<Int>? = null
+    private var sensorManager: SensorManager? = null
+    private var pendingImportUris by mutableStateOf<List<Uri>>(emptyList())
+    private var importing by mutableStateOf(false)
 
-    private val bwFilms by lazy {
-        val n = Native.filmCount()
-        val info = IntArray(6)
-        (0 until n).mapNotNull { i ->
-            val name = Native.filmInfo(i, info).substringBefore('|')
-            if (info[1] == 2) name else null
-        }.toSet()
+    private val filmCatalog by lazy { loadFilmCatalog() }
+
+    private val tiltListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (!ui.spiritLevel || ui.route != Route.CAMERA) return
+            val now = System.currentTimeMillis()
+            if (now - lastTiltMs < 33) return
+            lastTiltMs = now
+            val gx = event.values[0].toDouble()
+            val gy = event.values[1].toDouble()
+            if (gx * gx + gy * gy < 2.0) return
+            val deg = (atan2(gx, gy) * 180.0 / PI).toFloat()
+            val nearest = (deg / 90f).roundToInt() * 90f
+            val err = (deg - nearest).coerceIn(-45f, 45f)
+            ui.tiltDeg = ui.tiltDeg * 0.78f + err * 0.22f
+        }
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
     }
 
     private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) startCamera() else Toast.makeText(this, "M-Film needs the camera to shoot", Toast.LENGTH_LONG).show()
+    }
+
+    private val askLocation = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
+        val ok = res.values.any { it }
+        ui.gpsTag = ok
+        getPreferences(MODE_PRIVATE).edit().putBoolean("gps_tag", ok).apply()
+        if (!ok) Toast.makeText(this, "Location permission denied", Toast.LENGTH_SHORT).show()
+    }
+
+    private val pickGallery = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isNotEmpty()) pendingImportUris = uris.take(36)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -138,11 +183,15 @@ class MainActivity : ComponentActivity() {
         ui.leftHanded = prefs.getBoolean("left_handed", false)
         ui.cleanFinder = prefs.getBoolean("clean_finder", false)
         ui.framelines = prefs.getBoolean("framelines", true)
-        ui.bwPreview = prefs.getBoolean("bw_preview", true)
+        ui.spiritLevel = prefs.getBoolean("spirit_level", true)
+        ui.filmPreviewMode = prefs.getInt("film_preview_mode", 2).coerceIn(0, 2)
         ui.singleShot = prefs.getBoolean("single_shot", false)
         ui.defaultPrintSize = prefs.getInt("default_print_size", 1).coerceIn(0, 2)
+        ui.gpsTag = prefs.getBoolean("gps_tag", false)
+        ui.autoCleanRaw = prefs.getBoolean("auto_clean_raw", false)
         ui.realisticWind = Native.getSetting(Native.SET_WIND) != 0
         ui.dateStamp = Native.getSetting(Native.SET_STAMP) != 0
+        sensorManager = getSystemService(SENSOR_SERVICE) as? SensorManager
         if (ui.singleShot && !ui.loaded) {
             Native.switchFilm(0, true)
         }
@@ -189,23 +238,54 @@ class MainActivity : ComponentActivity() {
             },
             toggleDoubleExp = {
                 ui.doubleExposure = !ui.doubleExposure
-                if (!ui.doubleExposure) {
+                if (ui.doubleExposure) {
+                    ui.halfFrame = false
+                    halfFirst?.recycle(); halfFirst = null
+                    ui.halfFirstReady = false
+                } else {
                     doubleFirst?.recycle(); doubleFirst = null
                     pendingDoubleBlend?.recycle(); pendingDoubleBlend = null
                     ui.doubleFirstReady = false
                 }
                 startCamera()
             },
+            toggleHalfFrame = {
+                ui.halfFrame = !ui.halfFrame
+                if (ui.halfFrame) {
+                    ui.doubleExposure = false
+                    doubleFirst?.recycle(); doubleFirst = null
+                    ui.doubleFirstReady = false
+                } else {
+                    halfFirst?.recycle(); halfFirst = null
+                    pendingDoubleBlend?.recycle(); pendingDoubleBlend = null
+                    ui.halfFirstReady = false
+                }
+                startCamera()
+            },
+            toggleManualExp = {
+                if (ui.manualExpSupported) {
+                    ui.manualExp = !ui.manualExp
+                    applyCamera2Controls()
+                }
+            },
+            stepManualShutter = { delta ->
+                ui.manualShutterIdx = (ui.manualShutterIdx + delta).coerceIn(0, MANUAL_SHUTTERS.lastIndex)
+                if (ui.manualExp) applyCamera2Controls()
+            },
+            stepManualIso = { delta ->
+                ui.manualIsoIdx = (ui.manualIsoIdx + delta).coerceIn(0, MANUAL_ISOS.lastIndex)
+                if (ui.manualExp) applyCamera2Controls()
+            },
             toggleMf = {
                 if (ui.mfSupported) {
                     ui.mfEnabled = !ui.mfEnabled
                     if (!ui.mfEnabled) ui.mfLoupe = false
-                    applyFocusMode()
+                    applyCamera2Controls()
                 }
             },
             setMfDistance = { d ->
                 ui.mfDistance = d
-                if (ui.mfEnabled) applyFocusMode()
+                if (ui.mfEnabled) applyCamera2Controls()
             },
             setLoupe = { on -> ui.mfLoupe = on },
             toggleFlash = {
@@ -217,6 +297,7 @@ class MainActivity : ComponentActivity() {
                 if (ui.frontCamera) {
                     ui.mfEnabled = false
                     ui.mfLoupe = false
+                    ui.manualExp = false
                 }
                 startCamera()
             },
@@ -252,10 +333,19 @@ class MainActivity : ComponentActivity() {
                     onBack = { ui.route = Route.CAMERA },
                 )
                 Route.DARKROOM -> DarkroomScreen(
+                    pendingImportCount = pendingImportUris.size,
+                    importing = importing,
+                    onRequestImport = { pickGallery.launch("image/*") },
+                    onConfirmImport = { filmIdx, size, pushStops ->
+                        val uris = pendingImportUris
+                        pendingImportUris = emptyList()
+                        if (uris.isNotEmpty()) importGalleryRoll(uris, filmIdx, size, pushStops)
+                    },
+                    onCancelImport = { pendingImportUris = emptyList() },
                     onDevelop = { rollNo, size, pushStops -> DevelopService.start(this, rollNo, size, pushStops, 0) },
                     onCancel = { DevelopService.stop(this) },
                     onOpenPrints = { rollNo -> ui.printsRoll = rollNo; ui.route = Route.PRINTS },
-                    onBack = { updateLabel(); ui.route = Route.CAMERA },
+                    onBack = { pendingImportUris = emptyList(); updateLabel(); ui.route = Route.CAMERA },
                 )
                 Route.PRINTS -> PrintsScreen(
                     initialRoll = ui.printsRoll,
@@ -288,13 +378,46 @@ class MainActivity : ComponentActivity() {
                         ui.framelines = !ui.framelines
                         prefs.edit().putBoolean("framelines", ui.framelines).apply()
                     },
-                    onToggleBwPreview = {
-                        ui.bwPreview = !ui.bwPreview
-                        prefs.edit().putBoolean("bw_preview", ui.bwPreview).apply()
+                    onToggleSpiritLevel = {
+                        ui.spiritLevel = !ui.spiritLevel
+                        prefs.edit().putBoolean("spirit_level", ui.spiritLevel).apply()
+                    },
+                    onToggleLiveLook = {
+                        ui.filmPreviewMode = (ui.filmPreviewMode + 1) % 3
+                        prefs.edit().putInt("film_preview_mode", ui.filmPreviewMode).apply()
+                        updateFilmPreviewMatrix()
                     },
                     onToggleDateStamp = {
                         ui.dateStamp = !ui.dateStamp
                         Native.setSetting(Native.SET_STAMP, if (ui.dateStamp) 1 else 0)
+                    },
+                    onToggleGps = {
+                        if (!ui.gpsTag) {
+                            val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                            val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                            if (fine || coarse) {
+                                ui.gpsTag = true
+                                prefs.edit().putBoolean("gps_tag", true).apply()
+                            } else {
+                                askLocation.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                            }
+                        } else {
+                            ui.gpsTag = false
+                            prefs.edit().putBoolean("gps_tag", false).apply()
+                        }
+                    },
+                    onToggleAutoClean = {
+                        ui.autoCleanRaw = !ui.autoCleanRaw
+                        prefs.edit().putBoolean("auto_clean_raw", ui.autoCleanRaw).apply()
+                    },
+                    onCleanRaws = {
+                        val cleaned = card.cleanAllDevelopedRaws()
+                        ui.rawBytes = card.rawStorageBytes()
+                        Toast.makeText(
+                            this,
+                            if (cleaned > 0) "Cleaned $cleaned developed RAW files" else "No developed RAW files to clean",
+                            Toast.LENGTH_SHORT,
+                        ).show()
                     },
                     onToggleHand = {
                         ui.leftHanded = !ui.leftHanded
@@ -391,6 +514,52 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Wind on first", Toast.LENGTH_SHORT).show()
             return
         }
+        if (ui.halfFrame) {
+            val ic = imageCapture
+            if (ic == null) {
+                Toast.makeText(this, "Camera not ready", Toast.LENGTH_SHORT).show()
+                return
+            }
+            ic.targetRotation = held
+            ui.shutterFlash = true
+            playShutterSound()
+            preview.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            ic.takePicture(captureExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val half = try {
+                        frameHalfOf(image)
+                    } catch (t: Throwable) {
+                        Log.e(Card.TAG, "half-frame capture", t)
+                        null
+                    } finally {
+                        image.close()
+                    }
+                    if (half == null) return
+                    runOnUiThread {
+                        if (halfFirst == null) {
+                            halfFirst = half
+                            ui.halfFirstReady = true
+                        } else {
+                            val left = halfFirst!!
+                            halfFirst = null
+                            ui.halfFirstReady = false
+                            captureExecutor.execute {
+                                val diptych = stitchHalfFrame(left, half)
+                                left.recycle()
+                                half.recycle()
+                                pendingDoubleBlend = diptych
+                                runOnUiThread { Native.shutter() }
+                            }
+                        }
+                    }
+                }
+
+                override fun onError(e: ImageCaptureException) {
+                    Log.e(Card.TAG, "half-frame capture", e)
+                }
+            })
+            return
+        }
         if (ui.doubleExposure) {
             val ic = imageCapture
             if (ic == null) {
@@ -438,6 +607,36 @@ class MainActivity : ComponentActivity() {
             return
         }
         Native.shutter()
+    }
+
+    private fun frameHalfOf(image: ImageProxy): Bitmap {
+        val src = image.toBitmap()
+        val rot = image.imageInfo.rotationDegrees
+        val upright = if (rot != 0) {
+            Bitmap.createBitmap(src, 0, 0, src.width, src.height, Matrix().apply { postRotate(rot.toFloat()) }, true)
+                .also { if (it !== src) src.recycle() }
+        } else src
+        // target aspect 1280:1728 (~0.74 portrait half-frame)
+        var h = upright.height
+        var w = (h * 1280L / 1728L).toInt()
+        if (w > upright.width) {
+            w = upright.width
+            h = (w * 1728L / 1280L).toInt()
+        }
+        val crop = Bitmap.createBitmap(upright, (upright.width - w) / 2, (upright.height - h) / 2, w, h)
+        if (crop !== upright) upright.recycle()
+        val scaled = Bitmap.createScaledBitmap(crop, 1280, 1728, true)
+        if (scaled !== crop) crop.recycle()
+        return scaled
+    }
+
+    private fun stitchHalfFrame(left: Bitmap, right: Bitmap): Bitmap {
+        val out = Bitmap.createBitmap(2592, 1728, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        canvas.drawColor(0xFF0A0A09.toInt())
+        canvas.drawBitmap(left, null, Rect(0, 0, 1280, 1728), null)
+        canvas.drawBitmap(right, null, Rect(1312, 0, 2592, 1728), null)
+        return out
     }
 
     private fun blendBitmaps(a: Bitmap, b: Bitmap): Bitmap {
@@ -519,9 +718,11 @@ class MainActivity : ComponentActivity() {
                             else -> ui.ev.coerceIn(-2, 2).let { if (it == 0) 1 else it }
                         }
                         runOnUiThread {
-                            if (shutterStr != null) ui.liveShutter = shutterStr
-                            if (isoVal != null) ui.liveIso = isoVal
-                            ui.meterOffset = offset
+                            if (!ui.manualExp) {
+                                if (shutterStr != null) ui.liveShutter = shutterStr
+                                if (isoVal != null) ui.liveIso = isoVal
+                            }
+                            ui.meterOffset = if (ui.manualExp) 0 else offset
                         }
                     }
                 })
@@ -530,8 +731,8 @@ class MainActivity : ComponentActivity() {
 
                 val supportsRaw = ImageCapture.OUTPUT_FORMAT_RAW in
                     ImageCapture.getImageCaptureCapabilities(provider.getCameraInfo(camSel)).supportedOutputFormats
-                rawCapture = supportsRaw && !ui.doubleExposure && !ui.frontCamera
-                val mode = if (ui.doubleExposure) ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+                rawCapture = supportsRaw && !ui.doubleExposure && !ui.halfFrame && !ui.frontCamera
+                val mode = if (ui.doubleExposure || ui.halfFrame) ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
                     else ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
                 val icb = ImageCapture.Builder().setCaptureMode(mode)
                 if (rawCapture) {
@@ -548,6 +749,7 @@ class MainActivity : ComponentActivity() {
                 }
                 imageCapture = ic
                 applyFlashMode()
+                applyCamera2Controls()
                 Log.i(Card.TAG, if (rawCapture) "camera: RAW (DNG)" else "camera: JPEG -> CR2")
             } catch (t: Throwable) {
                 Log.e(Card.TAG, "camera", t)
@@ -561,7 +763,7 @@ class MainActivity : ComponentActivity() {
         val cam = camera ?: return
         if (ui.mfEnabled) {
             ui.mfEnabled = false
-            applyFocusMode()
+            applyCamera2Controls()
         }
         val point = preview.meteringPointFactory.createPoint(x, y)
         val b = FocusMeteringAction.Builder(point)
@@ -570,20 +772,30 @@ class MainActivity : ComponentActivity() {
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
-    private fun applyFocusMode() {
+    private fun applyCamera2Controls() {
         val cam = camera ?: return
         val ctrl = Camera2CameraControl.from(cam.cameraControl)
-        val opts = if (ui.mfEnabled && minFocusDist > 0f) {
-            CaptureRequestOptions.Builder()
-                .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                .setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, ui.mfDistance * minFocusDist)
-                .build()
+        val b = CaptureRequestOptions.Builder()
+        if (ui.mfEnabled && minFocusDist > 0f) {
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+            b.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, ui.mfDistance * minFocusDist)
         } else {
-            CaptureRequestOptions.Builder()
-                .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                .build()
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
         }
-        ctrl.setCaptureRequestOptions(opts)
+        if (ui.manualExp && ui.manualExpSupported) {
+            val (ssLabel, rawNs) = MANUAL_SHUTTERS.getOrElse(ui.manualShutterIdx) { MANUAL_SHUTTERS[3] }
+            val rawIso = MANUAL_ISOS.getOrElse(ui.manualIsoIdx) { 400 }
+            val ns = expRangeNs?.clamp(rawNs) ?: rawNs
+            val iso = isoRange?.clamp(rawIso) ?: rawIso
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            b.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, ns)
+            b.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, iso)
+            ui.liveShutter = ssLabel
+            ui.liveIso = iso
+        } else {
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+        }
+        ctrl.setCaptureRequestOptions(b.build())
     }
 
     private fun setZoom(ratio: Float) {
@@ -631,8 +843,57 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun recordShotGps(fileNumber: Int) {
+        if (!ui.gpsTag) return
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) return
+        try {
+            val lm = getSystemService(LOCATION_SERVICE) as? LocationManager ?: return
+            var best: Location? = null
+            for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER)) {
+                val loc = try { lm.getLastKnownLocation(p) } catch (_: SecurityException) { null }
+                if (loc != null && (best == null || loc.time > best.time)) best = loc
+            }
+            if (best != null) card.recordGps(fileNumber, best.latitude, best.longitude)
+        } catch (_: Throwable) { }
+    }
+
+    private fun importGalleryRoll(uris: List<Uri>, filmIdx: Int, size: Int, pushStops: Int) {
+        importing = true
+        captureExecutor.execute {
+            try {
+                val firstFile = IntArray(1)
+                val rollNo = Native.importRoll(filmIdx, uris.size, firstFile)
+                if (rollNo > 0) {
+                    val ok = card.importImagesAsCr2(uris, firstFile[0])
+                    runOnUiThread {
+                        importing = false
+                        if (ok > 0) {
+                            DevelopService.start(this, rollNo, size, pushStops, 0)
+                        } else {
+                            Toast.makeText(this, "Could not decode selected photos", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    runOnUiThread {
+                        importing = false
+                        Toast.makeText(this, "Could not create import roll", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.e(Card.TAG, "importGalleryRoll", t)
+                runOnUiThread {
+                    importing = false
+                    Toast.makeText(this, "Import error: ${t.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     /** the film OS asked for frame `number`: take it and keep it */
     private fun capture(number: Int) {
+        recordShotGps(number)
         val dbl = pendingDoubleBlend
         if (dbl != null) {
             pendingDoubleBlend = null
@@ -767,8 +1028,61 @@ class MainActivity : ComponentActivity() {
         ui.needWind = roll[3] != 0
         ui.iso = roll[4]
         ui.rollNumber = roll[5]
-        ui.isBwFilm = ui.loaded && ui.film in bwFilms
+        val entry = if (ui.loaded) filmCatalog.firstOrNull { it.name == ui.film } else null
+        ui.isBwFilm = entry?.group == 2
         ui.pendingRolls = Native.pendingRolls()
+        ui.rawBytes = card.rawStorageBytes()
+        updateFilmPreviewMatrix()
+        if (entry != null && ui.film != lastWidgetFilm) {
+            lastWidgetFilm = ui.film
+            card.saveWidgetCanister(entry.index, ui.exposures)
+        }
+        MFilmWidget.updateAll(this, ui)
+    }
+
+    private fun updateFilmPreviewMatrix() {
+        if (!ui.loaded || ui.filmPreviewMode == 0) {
+            ui.filmColorMatrix = null
+            return
+        }
+        val entry = filmCatalog.firstOrNull { it.name == ui.film }
+        if (entry == null) {
+            ui.filmColorMatrix = null
+            return
+        }
+        if (ui.filmPreviewMode == 1) {
+            ui.filmColorMatrix = if (entry.group == 2) ColorMatrix().apply { setSaturation(0f) }.array else null
+            return
+        }
+        // Mode 2: Live Film Look Preview from the film's attributes (group, punch, colour, warmth)
+        val cm = ColorMatrix()
+        if (entry.group == 2) {
+            cm.setSaturation(0f)
+            val c = 0.96f + (entry.punch - 2) * 0.09f
+            val t = (1f - c) * 128f + 4f
+            val w = (entry.warmth - 3) * 0.03f
+            cm.postConcat(ColorMatrix(floatArrayOf(
+                c * (1f + w), 0f, 0f, 0f, t,
+                0f, c, 0f, 0f, t,
+                0f, 0f, c * (1f - w), 0f, t,
+                0f, 0f, 0f, 1f, 0f,
+            )))
+        } else {
+            val sat = (0.76f + (entry.colour - 1) * 0.13f).coerceIn(0.70f, 1.35f)
+            cm.setSaturation(sat)
+            val c = 0.94f + (entry.punch - 2) * 0.075f
+            val lift = if (entry.group == 1) 0f else 6f
+            val t = (1f - c) * 128f + lift
+            val w = (entry.warmth - 3) * 0.055f
+            val gTint = if (entry.group == 3 && entry.warmth <= 2) 1.03f else 1f
+            cm.postConcat(ColorMatrix(floatArrayOf(
+                c * (1f + w), 0f, 0f, 0f, t,
+                0f, c * gTint, 0f, 0f, t,
+                0f, 0f, c * (1f - w), 0f, t,
+                0f, 0f, 0f, 1f, 0f,
+            )))
+        }
+        ui.filmColorMatrix = cm.array
     }
 
     private fun readLensSpecs() {
@@ -785,6 +1099,12 @@ class MainActivity : ComponentActivity() {
                     }
                     minFocusDist = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
                     ui.mfSupported = !ui.frontCamera && minFocusDist > 0f
+                    expRangeNs = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                    isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                    val aeModes = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)
+                    ui.manualExpSupported = !ui.frontCamera &&
+                        expRangeNs != null && isoRange != null &&
+                        aeModes != null && CaptureRequest.CONTROL_AE_MODE_OFF in aeModes
                     break
                 }
             }
@@ -813,6 +1133,9 @@ class MainActivity : ComponentActivity() {
         if (!Native.started()) return
         running = true
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            sensorManager?.registerListener(tiltListener, it, SensorManager.SENSOR_DELAY_UI)
+        }
         updateLabel()
         Choreographer.getInstance().postFrameCallback(tick)
         @Suppress("DEPRECATION")
@@ -824,6 +1147,7 @@ class MainActivity : ComponentActivity() {
         super.onPause()
         cancelTimer()
         holding.disable()
+        sensorManager?.unregisterListener(tiltListener)
         if (running) {
             running = false
             unregisterReceiver(batteryReceiver)
@@ -834,6 +1158,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         doubleFirst?.recycle()
+        halfFirst?.recycle()
         pendingDoubleBlend?.recycle()
         soundPool?.release()
         soundPool = null

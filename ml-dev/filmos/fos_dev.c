@@ -19,6 +19,10 @@
 #include "fos_jpeg.h"
 #include <math.h>
 #include <string.h>
+#ifdef FOS_MULTITHREAD
+#include <pthread.h>
+#include <stdlib.h>
+#endif
 
 #ifdef FOS_DEV_TEST
 #include <stdlib.h>
@@ -2396,22 +2400,22 @@ static __attribute__((noinline)) unsigned finish_grain(uint8_t *o, int n, unsign
 }
 
 /* row y of the print: vignette, halation, the film's table, grain */
-static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
+static void finish_init_tables(struct fos_dev *d)
 {
     const int W = FOS_PRINT_W, H = FOS_PRINT_H;
+    int pw = d->rows_axis_x ? d->ow : W;
+    for (int x = 0; x < pw; x++) { float t = 2.0f * x / (pw - 1) - 1; d->vig_x[x] = (int16_t) (0.06f * t * t * 4096); }
+    for (int k = 0; k < H; k++) { float t = 2.0f * k / (H - 1) - 1; d->vig_y[k] = (int16_t) (0.06f * t * t * 4096); }
+    for (int x = 0; x < W; x++) glow_pos(x, GW, &d->gx[x], &d->fx[x]);
+}
+
+static void finish_row_with_buf(const struct fos_dev *d, int y, uint16_t *pos, unsigned *seed)
+{
+    const int W = FOS_PRINT_W;
     const struct fos_look *L = d->look;
     int pw = d->rows_axis_x ? d->ow : W, px0 = d->rows_axis_x ? d->ox0 : 0;
-    if (y == 0)
-    {
-        /* vignette, as the lab: 1 - 0.12 r^2, r^2 = (x^2 + y^2) / 2 over
-         * -1..1; the x and y parts, in 1/4096 */
-        for (int x = 0; x < pw; x++) { float t = 2.0f * x / (pw - 1) - 1; d->vig_x[x] = (int16_t) (0.06f * t * t * 4096); }
-        for (int k = 0; k < H; k++) { float t = 2.0f * k / (H - 1) - 1; d->vig_y[k] = (int16_t) (0.06f * t * t * 4096); }
-        for (int x = 0; x < W; x++) glow_pos(x, GW, &d->gx[x], &d->fx[x]);
-    }
     int hal[3];
     for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (L->halation * L->hal_tint[c] * 256) : 0;
-    /* the glow between the grid's two rows about this one, in 1/8 */
     int32_t grow[GW];
     if (d->glow)
     {
@@ -2423,11 +2427,17 @@ static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
     uint8_t *o = d->rgb + 3 * y * W;
     memset(o, 0, 3 * px0);
     memset(o + 3 * (px0 + pw), 0, 3 * (W - px0 - pw));
-    finish_pos(d->lin + 3 * (y * W + px0), d->pos, pw, 4096 - d->vig_y[y], d->vig_x,
+    finish_pos(d->lin + 3 * (y * W + px0), pos, pw, 4096 - d->vig_y[y], d->vig_x,
                d->glow ? grow : 0, d->gx + px0, d->fx + px0, hal);
-    finish_lut(d->pos, o + 3 * px0, pw);
+    finish_lut(pos, o + 3 * px0, pw);
     int grain = (int) (L->grain * 255 * 0.55f * 256);
-    if (grain) d->seed = finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono);
+    if (grain) *seed = finish_grain(o + 3 * px0, pw, *seed, grain, L->mono);
+}
+
+static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
+{
+    if (y == 0) finish_init_tables(d);
+    finish_row_with_buf(d, y, d->pos, &d->seed);
 }
 
 /* the thumbnail: 6 x 6 boxes, a row of them at a time */
@@ -2635,19 +2645,19 @@ static __attribute__((noinline)) unsigned big_grain(uint8_t *o, int n, unsigned 
 /* row y of the big print into rgb: as stage_expose and stage_finish do a
  * row of the screen's, from its own sums, with the exposure and the glow
  * the screen's print found */
-static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8_t *rgb)
+static __attribute__((noinline)) void big_finish_buf(const struct fos_dev *d, int y, uint8_t *rgb,
+                                                     uint32_t *t32, uint16_t *bcam, uint16_t *blin, unsigned *seed)
 {
     const int bw = d->bw, sh = d->bshift;
     const struct fos_look *L = d->look;
     const uint16_t *s = d->brow[y];
-    uint32_t *t32 = d->b32;
     for (int i = 0; i < 3 * bw; i++) t32[i] = (uint32_t) s[i] << sh;
     int a, b;
     const uint16_t *ra, *rb;
     if (d->rows_axis_x) { a = d->bne_c[y]; b = d->bno_c[y]; ra = d->bne_r; rb = d->bno_r; }
     else { a = d->bne_r[y]; b = d->bno_r[y]; ra = d->bne_c; rb = d->bno_c; }
-    expose_cam(d, t32, d->bcam, bw, a, b, ra, rb);
-    expose_lin(d, d->bcam, d->blin, bw, 0, 0);
+    expose_cam(d, t32, bcam, bw, a, b, ra, rb);
+    expose_lin(d, bcam, blin, bw, 0, 0);
     int hal[3];
     for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (L->halation * L->hal_tint[c] * 256) : 0;
     int32_t grow[GW];
@@ -2658,19 +2668,133 @@ static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8
         const int32_t *g0 = d->glow + gy * GW, *g1 = g0 + GW;
         for (int j = 0; j < GW; j++) grow[j] = g0[j] * (8 - fy) + g1[j] * fy;
     }
-    finish_pos(d->blin, d->bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal);
-    finish_lut(d->bcam, rgb, bw);
+    finish_pos(blin, bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal);
+    finish_lut(bcam, rgb, bw);
     int grain = (int) (L->grain * 255 * 0.55f * 256);
-    if (grain) d->seed = big_grain(rgb, bw, d->seed, grain, L->mono);
+    if (grain) *seed = big_grain(rgb, bw, *seed, grain, L->mono);
     stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
+}
+
+#ifdef FOS_MULTITHREAD
+#define MT_THREADS 4
+static struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t start_cv, done_cv;
+    pthread_t workers[MT_THREADS - 1];
+    int inited, gen, pending, active;
+    void (*fn)(void *ctx, int tid, int nthreads);
+    void *ctx;
+} mt_pool = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER };
+
+static void *mt_worker(void *arg)
+{
+    int tid = (int) (intptr_t) arg;
+    int my_gen = 0;
+    for (;;)
+    {
+        pthread_mutex_lock(&mt_pool.mtx);
+        while (mt_pool.gen == my_gen) pthread_cond_wait(&mt_pool.start_cv, &mt_pool.mtx);
+        my_gen = mt_pool.gen;
+        void (*fn)(void *, int, int) = mt_pool.fn;
+        void *ctx = mt_pool.ctx;
+        int n = mt_pool.active;
+        pthread_mutex_unlock(&mt_pool.mtx);
+
+        if (tid < n - 1) fn(ctx, tid, n);
+
+        pthread_mutex_lock(&mt_pool.mtx);
+        if (--mt_pool.pending == 0) pthread_cond_signal(&mt_pool.done_cv);
+        pthread_mutex_unlock(&mt_pool.mtx);
+    }
+    return 0;
+}
+
+static void mt_run(void (*fn)(void *, int, int), void *ctx, int nthreads)
+{
+    if (nthreads <= 1) { fn(ctx, 0, 1); return; }
+    if (nthreads > MT_THREADS) nthreads = MT_THREADS;
+    pthread_mutex_lock(&mt_pool.mtx);
+    if (!mt_pool.inited)
+    {
+        for (int i = 0; i < MT_THREADS - 1; i++)
+            pthread_create(&mt_pool.workers[i], 0, mt_worker, (void *) (intptr_t) i);
+        mt_pool.inited = 1;
+    }
+    mt_pool.fn = fn;
+    mt_pool.ctx = ctx;
+    mt_pool.active = nthreads;
+    mt_pool.pending = MT_THREADS - 1;
+    mt_pool.gen++;
+    pthread_cond_broadcast(&mt_pool.start_cv);
+    pthread_mutex_unlock(&mt_pool.mtx);
+
+    fn(ctx, nthreads - 1, nthreads);
+
+    pthread_mutex_lock(&mt_pool.mtx);
+    while (mt_pool.pending > 0) pthread_cond_wait(&mt_pool.done_cv, &mt_pool.mtx);
+    pthread_mutex_unlock(&mt_pool.mtx);
+}
+
+struct mt_big_ctx { struct fos_dev *d; int y0, n; unsigned base_seed; };
+static void mt_big_fn(void *arg, int tid, int nthreads)
+{
+    struct mt_big_ctx *c = (struct mt_big_ctx *) arg;
+    const int bw = c->d->bw;
+    int i0 = c->n * tid / nthreads;
+    int i1 = c->n * (tid + 1) / nthreads;
+    if (i0 >= i1) return;
+    uint32_t *t32 = (uint32_t *) malloc((size_t) bw * 3 * sizeof(uint32_t));
+    uint16_t *bcam = (uint16_t *) malloc((size_t) bw * 6 * sizeof(uint16_t));
+    if (!t32 || !bcam) { free(t32); free(bcam); return; }
+    uint16_t *blin = bcam + bw * 3;
+    for (int i = i0; i < i1; i++)
+    {
+        int y = c->y0 + i;
+        unsigned s = c->base_seed ^ ((unsigned) y * 2654435761u);
+        big_finish_buf(c->d, y, c->d->brgb + i * bw * 3, t32, bcam, blin, &s);
+    }
+    free(t32);
+    free(bcam);
+}
+
+struct mt_fin_ctx { struct fos_dev *d; int y0, n; unsigned base_seed; };
+static void mt_fin_fn(void *arg, int tid, int nthreads)
+{
+    struct mt_fin_ctx *c = (struct mt_fin_ctx *) arg;
+    int i0 = c->n * tid / nthreads;
+    int i1 = c->n * (tid + 1) / nthreads;
+    uint16_t pos[FOS_PRINT_W * 3];
+    for (int i = i0; i < i1; i++)
+    {
+        int y = c->y0 + i;
+        unsigned s = c->base_seed ^ ((unsigned) y * 2654435761u);
+        finish_row_with_buf(c->d, y, pos, &s);
+    }
+}
+#endif
+
+static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8_t *rgb)
+{
+    big_finish_buf(d, y, rgb, d->b32, d->bcam, d->blin, &d->seed);
 }
 
 /* its next rows, to the JPEG and the zoom file */
 static void big_rows(struct fos_dev *d)
 {
     const int bw = d->bw, y0 = d->row, n = d->bh - y0 < BIG_ROWS ? d->bh - y0 : BIG_ROWS;
-    for (int i = 0; i < n; i++)
-        big_finish(d, y0 + i, d->brgb + i * bw * 3);
+#ifdef FOS_MULTITHREAD
+    if (n >= 4)
+    {
+        struct mt_big_ctx ctx = { d, y0, n, d->seed };
+        mt_run(mt_big_fn, &ctx, MT_THREADS);
+        d->seed += (unsigned) n * 2654435761u;
+    }
+    else
+#endif
+    {
+        for (int i = 0; i < n; i++)
+            big_finish(d, y0 + i, d->brgb + i * bw * 3);
+    }
     if (d->bjpeg) fos_jpeg_rows(d->bjpeg, d->brgb, bw * 3, n);
     if (d->bzoom)
     {
@@ -2847,8 +2971,20 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                 d->row = 0;
                 break;
             case ST_FINISH:
+#ifdef FOS_MULTITHREAD
+                if (d->row == 0) finish_init_tables(d);
+                {
+                    int n = H - d->row < 32 ? H - d->row : 32;
+                    struct mt_fin_ctx ctx = { d, d->row, n, d->seed };
+                    mt_run(mt_fin_fn, &ctx, MT_THREADS);
+                    d->seed += (unsigned) n * 2654435761u;
+                    d->row += n;
+                }
+                if (d->row >= H)
+#else
                 stage_finish(d, d->row);
                 if (++d->row == H)
+#endif
                 {
                     if (d->stamp)
                     {
