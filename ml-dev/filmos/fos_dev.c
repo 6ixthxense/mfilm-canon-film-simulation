@@ -3158,11 +3158,32 @@ struct grade_ctx {
     int w, h, stride_px;
     const uint16_t *srgb2lin;
     const int16_t *vig_x, *vig_y;
+    const uint8_t *gx, *fx;
     const int32_t *glow;
     int hal[3];
     int grain, mono;
     unsigned seed;
 };
+
+/* Inverse of lut.py's _photo(): finished sRGB (0..1) -> scene linear (0.11 = pivot).
+ * Keeps all 59 Film-Luts ("photo" input) and the 8 parametric film curves neutral at mid grey,
+ * uncrushed in shadows, and full-range in highlights. */
+static float photo_inv_linear(float v)
+{
+    if (v <= 0.0f) return 0.0f;
+    if (v > 0.998f) v = 0.998f;
+    const float y0 = 1.055f * powf(0.11f, 1.0f / 2.4f) - 0.055f;
+    const float c0 = logf(y0 / (1.0f - y0));
+    float target = logf(v / (1.0f - v));
+    float lo = -14.0f, hi = 6.0f;
+    for (int it = 0; it < 28; it++)
+    {
+        float s = 0.5f * (lo + hi);
+        float p = c0 + s * (0.7155f + s * (0.0256f + s * 0.0104f));
+        if (p < target) lo = s; else hi = s;
+    }
+    return 0.11f * exp2f(0.5f * (lo + hi));
+}
 
 static void grade_rows_range(const struct grade_ctx *c, int y0, int y1)
 {
@@ -3170,26 +3191,30 @@ static void grade_rows_range(const struct grade_ctx *c, int y0, int y1)
     const uint8_t (*lut)[3] = tab->lut;
     const int w = c->w, h = c->h;
     const int h0 = c->hal[0], h1 = c->hal[1], h2 = c->hal[2];
-    const int has_glow = c->glow != 0;
+    const int has_glow = c->glow != 0 && c->gx != 0 && c->fx != 0;
     const int gw = GRADE_GW, gh = GRADE_GH;
     uint8_t *row_rgb = (uint8_t *) fos_port_alloc(w * 3);
     if (!row_rgb) return;
 
+    int32_t grow[GRADE_GW];
     for (int y = y0; y < y1; y++)
     {
         uint32_t *px = c->rgba + (size_t) y * c->stride_px;
         int vy = 4096 - c->vig_y[y];
-        const int32_t *g0 = 0, *g1 = 0;
-        int fy = 0;
         if (has_glow)
         {
             float gyf = (y + 0.5f) * gh / h - 0.5f;
-            int gy = gyf < 0 ? 0 : (int) gyf;
-            if (gy >= gh - 1) { gy = gh - 2; fy = 8; }
-            else fy = (int) ((gyf - gy) * 8.0f + 0.5f);
-            if (fy < 0) fy = 0; else if (fy > 8) fy = 8;
-            g0 = c->glow + gy * gw;
-            g1 = g0 + gw;
+            int gy, fy;
+            if (gyf <= 0.0f) { gy = 0; fy = 0; }
+            else if (gyf >= gh - 1) { gy = gh - 2; fy = 8; }
+            else
+            {
+                gy = (int) gyf;
+                fy = (int) ((gyf - gy) * 8.0f + 0.5f);
+                if (fy < 0) fy = 0; else if (fy > 8) fy = 8;
+            }
+            const int32_t *g0 = c->glow + gy * gw, *g1 = g0 + gw;
+            for (int j = 0; j < gw; j++) grow[j] = g0[j] * (8 - fy) + g1[j] * fy;
         }
         uint8_t *o = row_rgb;
         for (int x = 0; x < w; x++, o += 3)
@@ -3201,8 +3226,8 @@ static void grade_rows_range(const struct grade_ctx *c, int y0, int y1)
             int b = (c->srgb2lin[(p >> 16) & 0xFF] * vig) >> 12;
             if (has_glow)
             {
-                int gx = (int) ((long long) x * (gw - 1) / (w > 1 ? w - 1 : 1));
-                int gl = (g0[gx] * (8 - fy) + g1[gx] * fy) >> 6;
+                int gx = c->gx[x], fx = c->fx[x];
+                int gl = (grow[gx] * (8 - fx) + grow[gx + 1] * fx) >> 6;
                 r += (gl * h0) >> 8;
                 g += (gl * h1) >> 8;
                 b += (gl * h2) >> 8;
@@ -3266,13 +3291,12 @@ int fos_dev_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
 
     grain_pct = grain_pct < 0 ? 0 : grain_pct > 200 ? 200 : grain_pct;
     hal_pct = hal_pct < 0 ? 0 : hal_pct > 200 ? 200 : hal_pct;
-    float mult = 4096.0f * 0.66f * exp2f(L->ev + push_ev);
+    float mult = 4096.0f * exp2f(L->ev + push_ev);
 
     uint16_t srgb2lin[256];
     for (int i = 0; i < 256; i++)
     {
-        float v = i / 255.0f;
-        float lin = v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f);
+        float lin = photo_inv_linear(i / 255.0f);
         int q = (int) (lin * mult + 0.5f);
         srgb2lin[i] = (uint16_t) (q < 0 ? 0 : q > 65535 ? 65535 : q);
     }
@@ -3291,20 +3315,37 @@ int fos_dev_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
     for (int y = 0; y < h; y++) { float t = 2.0f * y / (h - 1) - 1; vig_y[y] = (int16_t) (0.06f * t * t * 4096); }
 
     int32_t *glow = 0;
+    uint8_t *gx_tab = 0, *fx_tab = 0;
     static const float def_hal_tint[3] = { 1.0f, 0.35f, 0.12f };
     float hal_amt = L->halation > 0 ? L->halation * hal_pct / 100.0f : (hal_pct > 100 ? (hal_pct - 100) * 0.0025f : 0.0f);
     const float *ht = L->halation > 0 ? L->hal_tint : def_hal_tint;
     if (hal_amt > 0.0001f)
     {
         glow = (int32_t *) fos_port_alloc(GRADE_GW * GRADE_GH * 4);
-        if (glow)
+        int *counts = (int *) fos_port_alloc(GRADE_GW * GRADE_GH * sizeof(int));
+        gx_tab = (uint8_t *) fos_port_alloc(w);
+        fx_tab = (uint8_t *) fos_port_alloc(w);
+        if (glow && counts && gx_tab && fx_tab)
         {
             memset(glow, 0, GRADE_GW * GRADE_GH * 4);
+            memset(counts, 0, GRADE_GW * GRADE_GH * sizeof(int));
+            for (int x = 0; x < w; x++)
+            {
+                float gxf = (x + 0.5f) * GRADE_GW / w - 0.5f;
+                if (gxf <= 0.0f) { gx_tab[x] = 0; fx_tab[x] = 0; }
+                else if (gxf >= GRADE_GW - 1) { gx_tab[x] = GRADE_GW - 2; fx_tab[x] = 8; }
+                else
+                {
+                    int gxi = (int) gxf;
+                    int fxi = (int) ((gxf - gxi) * 8.0f + 0.5f);
+                    if (fxi < 0) fxi = 0; else if (fxi > 8) fxi = 8;
+                    gx_tab[x] = (uint8_t) gxi;
+                    fx_tab[x] = (uint8_t) fxi;
+                }
+            }
             int thr = (int) (L->hal_thr * 4096);
             int step_y = h > 480 ? h / 240 : 1;
             int step_x = w > 720 ? w / 360 : 1;
-            int counts[GRADE_GW * GRADE_GH];
-            memset(counts, 0, sizeof(counts));
             for (int y = 0; y < h; y += step_y)
             {
                 int gy = (int) ((long long) y * GRADE_GH / h);
@@ -3317,6 +3358,7 @@ int fos_dev_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
                     uint32_t p = px[x];
                     int r = srgb2lin[p & 0xFF], g = srgb2lin[(p >> 8) & 0xFF], b = srgb2lin[(p >> 16) & 0xFF];
                     int l = (871 * r + 2929 * g + 296 * b) >> 12;
+                    if (l > 5120) l = 5120;
                     int idx = gy * GRADE_GW + gx;
                     if (l > thr) glow[idx] += l - thr;
                     counts[idx]++;
@@ -3342,6 +3384,13 @@ int fos_dev_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
                 }
             }
         }
+        else
+        {
+            fos_port_free(glow); glow = 0;
+            fos_port_free(gx_tab); gx_tab = 0;
+            fos_port_free(fx_tab); fx_tab = 0;
+        }
+        fos_port_free(counts);
     }
 
     struct grade_ctx ctx;
@@ -3352,6 +3401,8 @@ int fos_dev_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
     ctx.srgb2lin = srgb2lin;
     ctx.vig_x = vig_x;
     ctx.vig_y = vig_y;
+    ctx.gx = gx_tab;
+    ctx.fx = fx_tab;
     ctx.glow = glow;
     for (int i = 0; i < 3; i++) ctx.hal[i] = glow ? (int) (hal_amt * ht[i] * 256) : 0;
     ctx.grain = (int) (L->grain * 255 * 0.55f * 256 * grain_pct / 100.0f);
@@ -3366,6 +3417,8 @@ int fos_dev_grade_rgba(uint32_t *rgba, int w, int h, int stride_px, int film,
 #endif
 
     fos_port_free(glow);
+    fos_port_free(gx_tab);
+    fos_port_free(fx_tab);
     fos_port_free(vig_x);
     fos_port_free(vig_y);
 #ifdef FOS_MULTITHREAD
