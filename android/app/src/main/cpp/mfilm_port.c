@@ -234,15 +234,26 @@ static void log_append(const char *line)
     if (f) { fputs(line, f); fclose(f); }
 }
 
+static int scan_max_roll_no(void)
+{
+    int max_no = roll.number;
+    DIR *d = opendir(dcim);
+    if (!d) return max_no;
+    struct dirent *e;
+    while ((e = readdir(d)))
+    {
+        int no = 0;
+        if (sscanf(e->d_name, "ROLL_%d.TXT", &no) == 1 || sscanf(e->d_name, "ROLL_%d.txt", &no) == 1)
+            if (no > max_no) max_no = no;
+    }
+    closedir(d);
+    return max_no;
+}
+
 static void load_roll(int film, int exposures)
 {
-    struct fos_lab_roll existing[32];
-    int nexisting = fos_lab_scan(existing, 32);
-    int max_no = roll.number;
-    for (int i = 0; i < nexisting; i++)
-        if (existing[i].number > max_no) max_no = existing[i].number;
     roll.loaded = 1;
-    roll.number = max_no + 1;
+    roll.number = scan_max_roll_no() + 1;
     roll.film = film;
     roll.exposures = exposures;
     roll.shot = 0;
@@ -580,12 +591,7 @@ int mf_import_roll(int film, int count, int *out_first_file)
     if (film < 0 || film >= fos_nfilms || count <= 0) return -1;
     if (count > 36) count = 36;
     pthread_mutex_lock(&state_lock);
-    struct fos_lab_roll existing[32];
-    int nexisting = fos_lab_scan(existing, 32);
-    int max_no = roll.number;
-    for (int i = 0; i < nexisting; i++)
-        if (existing[i].number > max_no) max_no = existing[i].number;
-    int new_roll = max_no + 1;
+    int new_roll = scan_max_roll_no() + 1;
     int first_file = file_no + 1;
     file_no += count;
 
