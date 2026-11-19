@@ -701,10 +701,14 @@ fun PrintsScreen(initialRoll: Int, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                itemsIndexed(prints, key = { _, p -> p.no }) { idx, item ->
-                    val cacheKey = "thumb:${item.jpegPath}"
-                    val thumb by produceState<Bitmap?>(initialValue = BitmapCache.get(cacheKey), key1 = item.jpegPath) {
-                        if (value != null) return@produceState
+                itemsIndexed(prints, key = { _, p -> "${p.no}:${p.jpegPath}" }) { idx, item ->
+                    val cacheKey = "thumb:${item.jpegPath}:${File(item.jpegPath).lastModified()}"
+                    val thumb by produceState<Bitmap?>(initialValue = BitmapCache.get(cacheKey), key1 = cacheKey) {
+                        val cached = BitmapCache.get(cacheKey)
+                        if (cached != null) {
+                            value = cached
+                            return@produceState
+                        }
                         value = withContext(Dispatchers.IO) {
                             decodeThumb(item.jpegPath, 360)?.also { BitmapCache.put(cacheKey, it) }
                         }
@@ -753,9 +757,13 @@ private fun Lightbox(
             if (o.outWidth > 0 && o.outHeight > 0) "${o.outWidth}×${o.outHeight}" else ""
         }
     }
-    val fullKey = "full:${item.jpegPath}"
-    val rawBmp by produceState<Bitmap?>(initialValue = BitmapCache.get(fullKey), key1 = item.jpegPath) {
-        if (value != null) return@produceState
+    val fullKey = "full:${item.jpegPath}:${File(item.jpegPath).lastModified()}"
+    val rawBmp by produceState<Bitmap?>(initialValue = BitmapCache.get(fullKey), key1 = fullKey) {
+        val cached = BitmapCache.get(fullKey)
+        if (cached != null) {
+            value = cached
+            return@produceState
+        }
         value = withContext(Dispatchers.IO) {
             decodeThumb(item.jpegPath, 1920)?.also { BitmapCache.put(fullKey, it) }
         }

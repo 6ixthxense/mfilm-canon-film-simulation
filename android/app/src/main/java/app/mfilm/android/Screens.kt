@@ -108,7 +108,15 @@ private fun SamplePhoto(filmKey: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val cacheKey = "sample:$filmKey"
     val bmp by produceState<Bitmap?>(initialValue = BitmapCache.get(cacheKey), key1 = filmKey) {
-        if (value != null || filmKey.isBlank()) return@produceState
+        if (filmKey.isBlank()) {
+            value = null
+            return@produceState
+        }
+        val cached = BitmapCache.get(cacheKey)
+        if (cached != null) {
+            value = cached
+            return@produceState
+        }
         value = withContext(Dispatchers.IO) {
             runCatching {
                 context.assets.open("samples/$filmKey.jpg").use { BitmapFactory.decodeStream(it) }
@@ -144,7 +152,11 @@ fun parseRollFrames(raw: String): List<FrameLog> {
 private fun CanisterBitmap(filmIndex: Int, exposures: Int, leaderOut: Boolean, modifier: Modifier = Modifier) {
     val cacheKey = "can:$filmIndex:$exposures:$leaderOut"
     val bmp by produceState<Bitmap?>(initialValue = BitmapCache.get(cacheKey), filmIndex, exposures, leaderOut) {
-        if (value != null) return@produceState
+        val cached = BitmapCache.get(cacheKey)
+        if (cached != null) {
+            value = cached
+            return@produceState
+        }
         value = withContext(Dispatchers.IO) {
             Bitmap.createBitmap(260, 220, Bitmap.Config.ARGB_8888).also {
                 Native.drawCanister(filmIndex, exposures, if (leaderOut) 256 else 0, it)
