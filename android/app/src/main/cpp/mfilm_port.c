@@ -70,6 +70,7 @@ int mf_poll_event(int *what, int *a, int *b)
 
 /* ---------------------------------------------------------------- the camera's state */
 
+static pthread_mutex_t state_lock = PTHREAD_MUTEX_INITIALIZER;
 static int settings[FS_COUNT] = {
     [FS_HUD] = 1, [FS_LEDS] = 1, [FS_FOCUS] = 1, [FS_WIND] = 0,
     [FS_APKEYS] = 1, [FS_LENS_WIDE] = 6, [FS_FSTOP] = 9,
@@ -200,7 +201,13 @@ void fos_port_stat(const struct fos_stat *s) { }
 void *fos_port_alloc(int size) { return malloc((size_t) size); }
 void fos_port_free(void *p) { free(p); }
 
-void fos_port_roll(struct fos_roll *r) { *r = roll; r->need_wind = need_wind; }
+void fos_port_roll(struct fos_roll *r)
+{
+    pthread_mutex_lock(&state_lock);
+    *r = roll;
+    r->need_wind = need_wind;
+    pthread_mutex_unlock(&state_lock);
+}
 
 /* the phone plays an EOS M: its CR2s are the EOS M's (mkcr2), and the
  * darkroom knows that camera best. sim/port_files.c's is renamed away */
@@ -331,15 +338,17 @@ static void shot_end(int dng)
 
 void mf_roll_info(int out[6], char *film, int film_size)
 {
-    /* read from another thread: a snapshot good enough for a label */
+    pthread_mutex_lock(&state_lock);
     struct fos_roll r = roll;
+    int nw = need_wind;
+    pthread_mutex_unlock(&state_lock);
     int known = r.loaded && r.film >= 0 && r.film < fos_nfilms;
     out[0] = r.loaded; out[1] = r.shot; out[2] = r.exposures;
-    out[3] = need_wind;
+    out[3] = nw;
     out[4] = known ? fos_films[r.film].box_iso : 0;
     out[5] = r.number;
     if (film && film_size > 0)
-        snprintf(film, (size_t) film_size, "%s", r.loaded && r.film >= 0 && r.film < fos_nfilms ? fos_films[r.film].name : "");
+        snprintf(film, (size_t) film_size, "%s", known ? fos_films[r.film].name : "");
 }
 
 int mf_pending_rolls(void)
@@ -412,35 +421,47 @@ void mf_draw_canister(int film, int exposures, int leader, uint32_t *argb, int w
 
 void mf_load_roll(int film, int exposures)
 {
+    pthread_mutex_lock(&state_lock);
     if (film >= 0 && film < fos_nfilms && !roll.loaded) load_roll(film, exposures);
+    pthread_mutex_unlock(&state_lock);
 }
 
 void mf_switch_film(int film, int single_mode)
 {
-    if (film < 0 || film >= fos_nfilms) return;
-    if (!single_mode)
+    pthread_mutex_lock(&state_lock);
+    if (film >= 0 && film < fos_nfilms)
     {
-        if (!roll.loaded) load_roll(film, 36);
-        return;
+        if (!single_mode)
+        {
+            if (!roll.loaded) load_roll(film, 36);
+        }
+        else if (!(roll.loaded && roll.film == film && roll.shot < 64))
+        {
+            if (roll.loaded) rewind_roll();
+            load_roll(film, 64);
+        }
     }
-    if (roll.loaded && roll.film == film && roll.shot < 64) return;
-    if (roll.loaded) rewind_roll();
-    load_roll(film, 64);
+    pthread_mutex_unlock(&state_lock);
 }
 
 void mf_rewind_roll(void)
 {
+    pthread_mutex_lock(&state_lock);
     rewind_roll();
+    pthread_mutex_unlock(&state_lock);
 }
 
 int mf_roll_frames(char *out, int out_size)
 {
     if (!out || out_size <= 0) return 0;
     out[0] = 0;
-    if (!roll.loaded || roll.shot <= 0) return 0;
+    pthread_mutex_lock(&state_lock);
+    int loaded = roll.loaded, shot = roll.shot, rno = roll.number;
+    pthread_mutex_unlock(&state_lock);
+    if (!loaded || shot <= 0) return 0;
     struct fos_lab_frame frames[64];
-    int n = fos_lab_frames(roll.number, frames, 64);
-    if (n > roll.shot) n = roll.shot;
+    int n = fos_lab_frames(rno, frames, 64);
+    if (n > shot) n = shot;
     int pos = 0;
     for (int i = 0; i < n && pos < out_size - 1; i++)
     {
@@ -454,17 +475,22 @@ int mf_roll_frames(char *out, int out_size)
 
 int mf_get_setting(int id)
 {
-    return (id >= 0 && id < FS_COUNT) ? settings[id] : 0;
+    pthread_mutex_lock(&state_lock);
+    int v = (id >= 0 && id < FS_COUNT) ? settings[id] : 0;
+    pthread_mutex_unlock(&state_lock);
+    return v;
 }
 
 void mf_set_setting(int id, int val)
 {
+    pthread_mutex_lock(&state_lock);
     if (id >= 0 && id < FS_COUNT)
     {
         settings[id] = val;
         if (id == FS_WIND && !val) need_wind = 0;
         save_state();
     }
+    pthread_mutex_unlock(&state_lock);
 }
 
 int mf_lab_rolls(char *out, int out_size)
@@ -725,6 +751,7 @@ void mf_run(void)
         done = shot_done_req; shot_done_req = 0;
         pthread_mutex_unlock(&in_lock);
 
+        pthread_mutex_lock(&state_lock);
         if (done && shot_pending)
         {
             if (done > 0) shot_end(done == 2);
@@ -737,6 +764,7 @@ void mf_run(void)
             post_event(MF_EV_WIND, 0, 0);
         }
         if (fire) shutter();
+        pthread_mutex_unlock(&state_lock);
         sleep_ms(30);
     }
 }

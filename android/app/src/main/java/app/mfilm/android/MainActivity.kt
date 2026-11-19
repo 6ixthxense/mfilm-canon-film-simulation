@@ -17,8 +17,7 @@ import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
+import android.media.SoundPool
 import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
@@ -81,8 +80,12 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val captureExecutor = Executors.newSingleThreadExecutor()
-    private val soundExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var soundPool: SoundPool? = null
+    private var sfxShutter = 0
+    private var sfxWind = 0
+    private var sfxRewind = 0
+    private var sfxTick = 0
     private val ev = IntArray(3)
     private val roll = IntArray(6)
     private var running = false
@@ -137,12 +140,28 @@ class MainActivity : ComponentActivity() {
         ui.framelines = prefs.getBoolean("framelines", true)
         ui.bwPreview = prefs.getBoolean("bw_preview", true)
         ui.singleShot = prefs.getBoolean("single_shot", false)
+        ui.defaultPrintSize = prefs.getInt("default_print_size", 1).coerceIn(0, 2)
         ui.realisticWind = Native.getSetting(Native.SET_WIND) != 0
         ui.dateStamp = Native.getSetting(Native.SET_STAMP) != 0
         if (ui.singleShot && !ui.loaded) {
             Native.switchFilm(0, true)
         }
         updateLabel()
+
+        soundPool = SoundPool.Builder()
+            .setMaxStreams(4)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            .build().also { sp ->
+                sfxShutter = sp.load(this, R.raw.shutter, 1)
+                sfxWind = sp.load(this, R.raw.wind, 1)
+                sfxRewind = sp.load(this, R.raw.rewind, 1)
+                sfxTick = sp.load(this, R.raw.tick, 1)
+            }
 
         val actions = Actions(
             half = { down ->
@@ -175,6 +194,7 @@ class MainActivity : ComponentActivity() {
                     pendingDoubleBlend?.recycle(); pendingDoubleBlend = null
                     ui.doubleFirstReady = false
                 }
+                startCamera()
             },
             toggleMf = {
                 if (ui.mfSupported) {
@@ -188,6 +208,18 @@ class MainActivity : ComponentActivity() {
                 if (ui.mfEnabled) applyFocusMode()
             },
             setLoupe = { on -> ui.mfLoupe = on },
+            toggleFlash = {
+                ui.flashMode = (ui.flashMode + 1) % 3
+                applyFlashMode()
+            },
+            toggleCamera = {
+                ui.frontCamera = !ui.frontCamera
+                if (ui.frontCamera) {
+                    ui.mfEnabled = false
+                    ui.mfLoupe = false
+                }
+                startCamera()
+            },
         )
 
         setContent {
@@ -211,6 +243,7 @@ class MainActivity : ComponentActivity() {
                 Route.ROLL -> RollScreen(
                     ui,
                     onRewind = {
+                        playRewindSound()
                         Native.rewindRoll()
                         updateLabel()
                         ui.route = Route.CAMERA
@@ -237,6 +270,10 @@ class MainActivity : ComponentActivity() {
                             Native.switchFilm(0, true)
                             updateLabel()
                         }
+                    },
+                    onTogglePrintSize = {
+                        ui.defaultPrintSize = (ui.defaultPrintSize + 1) % 3
+                        prefs.edit().putInt("default_print_size", ui.defaultPrintSize).apply()
                     },
                     onToggleWind = {
                         ui.realisticWind = !ui.realisticWind
@@ -355,39 +392,52 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (ui.doubleExposure) {
-            val snap = captureViewfinderFrame()
-            if (snap == null) {
+            val ic = imageCapture
+            if (ic == null) {
                 Toast.makeText(this, "Camera not ready", Toast.LENGTH_SHORT).show()
                 return
             }
-            if (doubleFirst == null) {
-                doubleFirst = snap
-                ui.doubleFirstReady = true
-                playShutterSound()
-                preview.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                return
-            } else {
-                pendingDoubleBlend = blendBitmaps(doubleFirst!!, snap)
-                doubleFirst?.recycle(); doubleFirst = null
-                snap.recycle()
-                ui.doubleFirstReady = false
-                Native.shutter()
-                return
-            }
+            ic.targetRotation = held
+            ui.shutterFlash = true
+            playShutterSound()
+            preview.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            ic.takePicture(captureExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val snap = try {
+                        frameOf(image)
+                    } catch (t: Throwable) {
+                        Log.e(Card.TAG, "double exposure capture", t)
+                        null
+                    } finally {
+                        image.close()
+                    }
+                    if (snap == null) return
+                    runOnUiThread {
+                        if (doubleFirst == null) {
+                            doubleFirst = snap
+                            ui.doubleFirstReady = true
+                        } else {
+                            val first = doubleFirst!!
+                            doubleFirst = null
+                            ui.doubleFirstReady = false
+                            captureExecutor.execute {
+                                val blended = blendBitmaps(first, snap)
+                                first.recycle()
+                                snap.recycle()
+                                pendingDoubleBlend = blended
+                                runOnUiThread { Native.shutter() }
+                            }
+                        }
+                    }
+                }
+
+                override fun onError(e: ImageCaptureException) {
+                    Log.e(Card.TAG, "double exposure capture", e)
+                }
+            })
+            return
         }
         Native.shutter()
-    }
-
-    private fun captureViewfinderFrame(): Bitmap? {
-        val raw = preview.bitmap ?: return null
-        var w = raw.width
-        var h = w * 2 / 3
-        if (h > raw.height) { h = raw.height; w = h * 3 / 2 }
-        val scale = minOf(1f, 2592f / w)
-        val m = Matrix().apply { postScale(scale, scale) }
-        val out = Bitmap.createBitmap(raw, (raw.width - w) / 2, (raw.height - h) / 2, w, h, m, true)
-        if (out !== raw) raw.recycle()
-        return out
     }
 
     private fun blendBitmaps(a: Bitmap, b: Bitmap): Bitmap {
@@ -442,7 +492,7 @@ class MainActivity : ComponentActivity() {
         future.addListener({
             try {
                 val provider = future.get()
-                val back = CameraSelector.DEFAULT_BACK_CAMERA
+                val camSel = if (ui.frontCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                 val selector = ResolutionSelector.Builder()
                     .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY).build()
                 val pvb = Preview.Builder().setResolutionSelector(selector)
@@ -478,9 +528,12 @@ class MainActivity : ComponentActivity() {
                 val pv = pvb.build()
                 pv.setSurfaceProvider(preview.surfaceProvider)
 
-                rawCapture = ImageCapture.OUTPUT_FORMAT_RAW in
-                    ImageCapture.getImageCaptureCapabilities(provider.getCameraInfo(back)).supportedOutputFormats
-                val icb = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                val supportsRaw = ImageCapture.OUTPUT_FORMAT_RAW in
+                    ImageCapture.getImageCaptureCapabilities(provider.getCameraInfo(camSel)).supportedOutputFormats
+                rawCapture = supportsRaw && !ui.doubleExposure && !ui.frontCamera
+                val mode = if (ui.doubleExposure) ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+                    else ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+                val icb = ImageCapture.Builder().setCaptureMode(mode)
                 if (rawCapture) {
                     icb.setOutputFormat(ImageCapture.OUTPUT_FORMAT_RAW)
                     Camera2Interop.Extender(icb).setCaptureRequestOption(
@@ -488,13 +541,14 @@ class MainActivity : ComponentActivity() {
                 } else icb.setResolutionSelector(selector)
                 val ic = icb.build()
                 provider.unbindAll()
-                camera = provider.bindToLifecycle(this, back, pv, ic).also {
+                camera = provider.bindToLifecycle(this, camSel, pv, ic).also {
                     exposureScale(it)
                     zoomScale(it)
                     readLensSpecs()
                 }
                 imageCapture = ic
-                Log.i(Card.TAG, if (rawCapture) "camera: RAW (DNG)" else "camera: no RAW, photos made into CR2s")
+                applyFlashMode()
+                Log.i(Card.TAG, if (rawCapture) "camera: RAW (DNG)" else "camera: JPEG -> CR2")
             } catch (t: Throwable) {
                 Log.e(Card.TAG, "camera", t)
                 Toast.makeText(this, "No camera: ${t.message}", Toast.LENGTH_LONG).show()
@@ -569,13 +623,19 @@ class MainActivity : ComponentActivity() {
         ui.ev = state.exposureCompensationIndex.coerceIn(ui.evMin, ui.evMax)
     }
 
+    private fun applyFlashMode() {
+        imageCapture?.flashMode = when (ui.flashMode) {
+            1 -> ImageCapture.FLASH_MODE_AUTO
+            2 -> ImageCapture.FLASH_MODE_ON
+            else -> ImageCapture.FLASH_MODE_OFF
+        }
+    }
+
     /** the film OS asked for frame `number`: take it and keep it */
     private fun capture(number: Int) {
         val dbl = pendingDoubleBlend
         if (dbl != null) {
             pendingDoubleBlend = null
-            playShutterSound()
-            preview.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             captureExecutor.execute {
                 val ok = try {
                     card.shot(number, dbl)
@@ -596,6 +656,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         ic.targetRotation = held
+        ui.shutterFlash = true
         playShutterSound()
         preview.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         if (rawCapture) {
@@ -669,8 +730,8 @@ class MainActivity : ComponentActivity() {
             Native.EV_CAPTURE -> capture(a)
             Native.EV_SHOT -> {
                 updateLabel()
-                if (ui.singleShot && !DevelopState.running && ui.rollNumber > 0 && ui.shot > 0) {
-                    DevelopService.start(this, ui.rollNumber, 0, 0, ui.shot)
+                if (ui.singleShot && ui.rollNumber > 0 && ui.shot > 0) {
+                    DevelopService.start(this, ui.rollNumber, ui.defaultPrintSize, 0, ui.shot)
                 }
             }
             Native.EV_LOADED, Native.EV_REWOUND, Native.EV_WIND -> updateLabel()
@@ -713,60 +774,31 @@ class MainActivity : ComponentActivity() {
     private fun readLensSpecs() {
         try {
             val cm = getSystemService(CAMERA_SERVICE) as CameraManager
+            val wantFacing = if (ui.frontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
             for (id in cm.cameraIdList) {
                 val c = cm.getCameraCharacteristics(id)
-                if (c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
+                if (c.get(CameraCharacteristics.LENS_FACING) == wantFacing) {
                     val ap = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.firstOrNull()
                     if (ap != null && ap > 0f) {
                         Native.setShotFstop((ap * 100f).toInt())
                         ui.liveFstop = "f/%.1f".format(ap)
                     }
                     minFocusDist = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-                    ui.mfSupported = minFocusDist > 0f
+                    ui.mfSupported = !ui.frontCamera && minFocusDist > 0f
                     break
                 }
             }
         } catch (_: Throwable) { }
     }
 
-    private fun playShutterSound() = playTone(shortArrayOf(28000, -24000, 14000, -8000), 44100, 48)
-    private fun playWindSound() = playTone(shortArrayOf(12000, -10000, 0, 0, 10000, -9000, 0, 0, 9000, -7000), 22050, 80)
-    private fun playTickSound() = playTone(shortArrayOf(9000, -7000, 0, 0), 22050, 22)
-
-    private fun playTone(pattern: ShortArray, sampleRate: Int, ms: Int) {
-        soundExecutor.execute {
-            try {
-                val n = sampleRate * ms / 1000
-                val buf = ShortArray(n)
-                for (i in 0 until n) {
-                    val env = 1f - i.toFloat() / n
-                    val p = pattern[i % pattern.size]
-                    buf[i] = (p * env).toInt().toShort()
-                }
-                val track = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build()
-                    )
-                    .setTransferMode(AudioTrack.MODE_STATIC)
-                    .setBufferSizeInBytes(buf.size * 2)
-                    .build()
-                track.write(buf, 0, buf.size)
-                track.play()
-                Thread.sleep(ms.toLong() + 30)
-                track.release()
-            } catch (_: Throwable) { }
-        }
+    private fun playSound(id: Int) {
+        if (id != 0) soundPool?.play(id, 1f, 1f, 1, 0, 1f)
     }
+
+    private fun playShutterSound() = playSound(sfxShutter)
+    private fun playWindSound() = playSound(sfxWind)
+    private fun playRewindSound() = playSound(sfxRewind)
+    private fun playTickSound() = playSound(sfxTick)
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
@@ -803,6 +835,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         doubleFirst?.recycle()
         pendingDoubleBlend?.recycle()
-        soundExecutor.shutdownNow()
+        soundPool?.release()
+        soundPool = null
     }
 }

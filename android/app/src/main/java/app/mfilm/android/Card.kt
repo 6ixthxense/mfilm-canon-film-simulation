@@ -4,11 +4,15 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.ExifInterface
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -138,7 +142,51 @@ class Card(private val context: Context) {
         n
     }
 
+    private fun writeExif(folder: File, jpeg: File) {
+        try {
+            val exif = ExifInterface(jpeg.absolutePath)
+            var filmName = folder.name.substringAfter(' ', folder.name)
+            var rollNo = -1
+            val tagFile = folder.listFiles { f -> f.name.startsWith("ROLL") && f.name.endsWith(".TXT") }?.firstOrNull()
+            if (tagFile != null) {
+                for (line in tagFile.readLines()) {
+                    if (line.startsWith("roll = ")) rollNo = line.removePrefix("roll = ").trim().toIntOrNull() ?: -1
+                    if (line.startsWith("film = ")) filmName = line.removePrefix("film = ").trim()
+                }
+            }
+            var dateStr: String? = null
+            var fstopStr: String? = null
+            if (rollNo > 0) {
+                val logFile = File(dcim, "ROLL_%03d.TXT".format(rollNo))
+                val stem = jpeg.nameWithoutExtension
+                if (logFile.exists()) {
+                    val match = logFile.readLines().firstOrNull { it.contains(stem) }
+                    if (match != null) {
+                        Regex("(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})").find(match)?.let {
+                            dateStr = "${it.groupValues[1].replace('-', ':')} ${it.groupValues[2]}"
+                        }
+                        Regex("f/([0-9.]+)").find(match)?.let { fstopStr = it.groupValues[1] }
+                    }
+                }
+            }
+            if (dateStr == null) {
+                dateStr = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date(jpeg.lastModified()))
+            }
+            exif.setAttribute(ExifInterface.TAG_MAKE, "M-Film")
+            exif.setAttribute(ExifInterface.TAG_MODEL, filmName)
+            exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "M-Film · $filmName")
+            exif.setAttribute(ExifInterface.TAG_USER_COMMENT, "Film: $filmName")
+            exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, dateStr)
+            exif.setAttribute(ExifInterface.TAG_DATETIME, dateStr)
+            if (fstopStr != null) exif.setAttribute(ExifInterface.TAG_F_NUMBER, fstopStr)
+            exif.saveAttributes()
+        } catch (t: Throwable) {
+            Log.w(TAG, "exif ${jpeg.name}: ${t.message}")
+        }
+    }
+
     private fun toGallery(folder: String, file: File): Boolean {
+        file.parentFile?.let { writeExif(it, file) }
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, "${folder.replace(' ', '_')}_${file.name}")
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")

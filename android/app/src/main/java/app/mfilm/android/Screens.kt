@@ -2,6 +2,7 @@ package app.mfilm.android
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.LruCache
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -38,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -53,7 +55,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 private val SHELF_WOOD = Color(0xFF1E150F)
@@ -88,18 +92,32 @@ fun loadFilmCatalog(): List<FilmEntry> {
     }
 }
 
+object BitmapCache {
+    private val cache = object : LruCache<String, Bitmap>(
+        (Runtime.getRuntime().maxMemory() / 1024L / 8L).toInt().coerceIn(8 * 1024, 32 * 1024)
+    ) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+
+    fun get(key: String): Bitmap? = cache.get(key)
+    fun put(key: String, bmp: Bitmap) { cache.put(key, bmp) }
+}
+
 @Composable
 private fun SamplePhoto(filmKey: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val bmp = remember(filmKey) {
-        if (filmKey.isBlank()) null
-        else runCatching {
-            context.assets.open("samples/$filmKey.jpg").use { BitmapFactory.decodeStream(it) }
-        }.getOrNull()
+    val cacheKey = "sample:$filmKey"
+    val bmp by produceState<Bitmap?>(initialValue = BitmapCache.get(cacheKey), key1 = filmKey) {
+        if (value != null || filmKey.isBlank()) return@produceState
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                context.assets.open("samples/$filmKey.jpg").use { BitmapFactory.decodeStream(it) }
+            }.getOrNull()?.also { BitmapCache.put(cacheKey, it) }
+        }
     }
     if (bmp != null) {
         Image(
-            bmp.asImageBitmap(),
+            bmp!!.asImageBitmap(),
             contentDescription = "Sample for $filmKey",
             modifier = modifier,
             contentScale = ContentScale.Crop,
@@ -124,12 +142,21 @@ fun parseRollFrames(raw: String): List<FrameLog> {
 
 @Composable
 private fun CanisterBitmap(filmIndex: Int, exposures: Int, leaderOut: Boolean, modifier: Modifier = Modifier) {
-    val bmp = remember(filmIndex, exposures, leaderOut) {
-        Bitmap.createBitmap(260, 220, Bitmap.Config.ARGB_8888).also {
-            Native.drawCanister(filmIndex, exposures, if (leaderOut) 256 else 0, it)
+    val cacheKey = "can:$filmIndex:$exposures:$leaderOut"
+    val bmp by produceState<Bitmap?>(initialValue = BitmapCache.get(cacheKey), filmIndex, exposures, leaderOut) {
+        if (value != null) return@produceState
+        value = withContext(Dispatchers.IO) {
+            Bitmap.createBitmap(260, 220, Bitmap.Config.ARGB_8888).also {
+                Native.drawCanister(filmIndex, exposures, if (leaderOut) 256 else 0, it)
+                BitmapCache.put(cacheKey, it)
+            }
         }
     }
-    Image(bmp.asImageBitmap(), contentDescription = null, modifier = modifier)
+    if (bmp != null) {
+        Image(bmp!!.asImageBitmap(), contentDescription = null, modifier = modifier)
+    } else {
+        Box(modifier)
+    }
 }
 
 @Composable
