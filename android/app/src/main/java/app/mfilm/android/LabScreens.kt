@@ -1,5 +1,6 @@
 package app.mfilm.android
 
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -9,10 +10,13 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.view.HapticFeedbackConstants
+import android.widget.EditText
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -125,31 +129,76 @@ fun parseRollPrints(raw: String): List<PrintItem> {
     }.toList()
 }
 
+private fun formatMb(bytes: Long): String {
+    val mb = bytes / (1024.0 * 1024.0)
+    return if (mb >= 100) "%.0f MB".format(mb) else "%.1f MB".format(mb)
+}
+
 /**
  * Darkroom: pure black with safelight-red accents.
- * Lists rolls as film envelopes, lets the user pick S / M / L print size,
- * and shows live paper-develop preview via fos_dev_preview while DevelopService runs.
+ * Lists rolls as film envelopes, supports gallery import, roll labels, re-developing,
+ * S / M / L print size, push/pull, and live paper-develop preview while DevelopService runs.
  */
 @Composable
 fun DarkroomScreen(
+    pendingImportCount: Int,
+    importing: Boolean,
+    onRequestImport: () -> Unit,
+    onConfirmImport: (Int, Int, Int) -> Unit,
+    onCancelImport: () -> Unit,
     onDevelop: (Int, Int, Int) -> Unit,
     onCancel: () -> Unit,
     onOpenPrints: (Int) -> Unit,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
     val view = LocalView.current
+    val card = remember { Card(context) }
     var rolls by remember { mutableStateOf<List<LabRoll>>(emptyList()) }
+    var memos by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    var rawBytes by remember { mutableStateOf(0L) }
     var selectedRoll by remember { mutableIntStateOf(-1) }
-    var printSize by remember { mutableIntStateOf(0) }
+    var printSize by remember { mutableIntStateOf(1) }
     var pushStops by remember { mutableIntStateOf(0) }
     var deleteAsk by remember { mutableStateOf(false) }
+    var redevMode by remember { mutableStateOf(false) }
+    val catalog = remember { loadFilmCatalog() }
+    var importFilmIdx by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(DevelopState.running) {
+    fun refreshLab() {
         rolls = parseLabRolls(Native.labRolls())
-        if (selectedRoll < 0) {
+        memos = card.loadMemos()
+        rawBytes = card.rawStorageBytes()
+        if (selectedRoll < 0 || rolls.none { it.number == selectedRoll }) {
             selectedRoll = rolls.firstOrNull { it.isWaiting }?.number ?: rolls.firstOrNull()?.number ?: -1
         }
+    }
+
+    fun editRollMemo(rollNo: Int) {
+        val input = EditText(context).apply {
+            setText(memos[rollNo] ?: "")
+            hint = "e.g. KYOTO 2026"
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(context)
+            .setTitle("Roll %03d Label".format(rollNo))
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                card.setMemo(rollNo, input.text.toString())
+                memos = card.loadMemos()
+            }
+            .setNeutralButton("Clear") { _, _ ->
+                card.setMemo(rollNo, "")
+                memos = card.loadMemos()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    LaunchedEffect(DevelopState.running, importing) {
+        refreshLab()
         deleteAsk = false
+        redevMode = false
     }
 
     Column(
@@ -157,13 +206,91 @@ fun DarkroomScreen(
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Key("← Back", color = SAFELIGHT, onClick = onBack)
-            Label("DARKROOM", size = 15.sp, color = SAFELIGHT)
-            Spacer(Modifier.width(56.dp))
+            Label("DARKROOM · ${formatMb(rawBytes)}", size = 14.sp, color = SAFELIGHT)
+            if (!DevelopState.running && !importing && pendingImportCount == 0) {
+                Key("Import", color = Look.Amber, onClick = onRequestImport)
+            } else {
+                Spacer(Modifier.width(56.dp))
+            }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        if (DevelopState.running) {
+        if (importing) {
+            Box(
+                Modifier.weight(1f).fillMaxWidth().border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(4.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Label("PREPARING IMPORTED ROLL…", size = 13.sp, color = SAFELIGHT)
+            }
+        } else if (pendingImportCount > 0) {
+            // Inline film picker for imported gallery photos
+            Label("IMPORT $pendingImportCount PHOTO${if (pendingImportCount == 1) "" else "S"}  ·  PICK FILM", size = 12.sp, color = Look.Amber)
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(catalog, key = { it.index }) { f ->
+                    val picked = f.index == importFilmIdx
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(if (picked) Color(0xFF1A0705) else Color(0xFF0A0303), RoundedCornerShape(3.dp))
+                            .border(1.dp, if (picked) Look.Amber else SAFELIGHT_DIM, RoundedCornerShape(3.dp))
+                            .clickable {
+                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                importFilmIdx = f.index
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column {
+                            Label(f.name, size = 13.sp, color = if (picked) Look.Amber else SAFELIGHT)
+                            if (f.note.isNotBlank()) Label(f.note, size = 10.sp, color = SAFELIGHT_DIM)
+                        }
+                        Label("ISO ${f.iso}", size = 11.sp, color = SAFELIGHT_DIM)
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PRINT_SIZES.forEachIndexed { idx, (label, sz) ->
+                            if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
+                            Key(label, modifier = Modifier.defaultMinSize(30.dp, 40.dp), color = if (printSize == sz) SAFELIGHT else SAFELIGHT_DIM) { printSize = sz }
+                        }
+                    }
+                    Row(
+                        Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PUSH_STOPS.forEachIndexed { idx, (label, ev) ->
+                            if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
+                            Key(label, modifier = Modifier.defaultMinSize(30.dp, 40.dp), color = if (pushStops == ev) SAFELIGHT else SAFELIGHT_DIM) { pushStops = ev }
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Key("Cancel", modifier = Modifier.defaultMinSize(44.dp, 42.dp), color = SAFELIGHT_DIM, onClick = onCancelImport)
+                    Box(
+                        Modifier
+                            .defaultMinSize(84.dp, 44.dp)
+                            .border(1.dp, Look.Amber, RoundedCornerShape(3.dp))
+                            .clickable {
+                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                onConfirmImport(importFilmIdx, printSize, pushStops)
+                            }
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Label("Develop", size = 13.sp, color = Look.Amber)
+                    }
+                }
+            }
+        } else if (DevelopState.running) {
             // live developing tray
             Column(
                 Modifier
@@ -223,12 +350,13 @@ fun DarkroomScreen(
             }
             if (rolls.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Label("No rolls on card", size = 13.sp, color = SAFELIGHT_DIM)
+                    Label("No rolls on card · tap Import to develop gallery photos", size = 12.sp, color = SAFELIGHT_DIM)
                 }
             } else {
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(rolls, key = { it.number }) { r ->
                         val active = r.number == selectedRoll
+                        val memo = memos[r.number]
                         val status = when {
                             r.inCamera -> "IN CAMERA"
                             r.isDeveloped -> "DEVELOPED"
@@ -244,13 +372,18 @@ fun DarkroomScreen(
                                     view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                                     selectedRoll = r.number
                                     deleteAsk = false
+                                    redevMode = false
                                 }
                                 .padding(horizontal = 14.dp, vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column {
+                            Column(Modifier.weight(1f)) {
                                 Label("ROLL %03d · %s".format(r.number, r.filmName), size = 14.sp, color = SAFELIGHT)
+                                if (!memo.isNullOrBlank()) {
+                                    Spacer(Modifier.height(2.dp))
+                                    Label(memo, size = 11.sp, color = Look.Amber)
+                                }
                                 Spacer(Modifier.height(3.dp))
                                 Label("${r.shot}/${r.exposures} EXP  ·  ${r.loaded.take(10)}", size = 11.sp, color = SAFELIGHT_DIM)
                             }
@@ -261,6 +394,7 @@ fun DarkroomScreen(
 
                 val sel = rolls.find { it.number == selectedRoll }
                 if (sel != null) {
+                    val hasRaws = remember(sel.number, rolls) { Native.labHasRaws(sel.number) }
                     Spacer(Modifier.height(10.dp))
                     if (deleteAsk && !sel.inCamera) {
                         Row(
@@ -275,16 +409,74 @@ fun DarkroomScreen(
                                 Key("Del prints", color = SAFELIGHT) {
                                     Native.labDelete(sel.number, false)
                                     deleteAsk = false
-                                    rolls = parseLabRolls(Native.labRolls())
+                                    refreshLab()
+                                }
+                            }
+                            if (hasRaws && (sel.isDeveloped || sel.jpegs > 0)) {
+                                Key("Del RAW", color = SAFELIGHT) {
+                                    card.cleanRawsForRoll(sel.number)
+                                    deleteAsk = false
+                                    refreshLab()
                                 }
                             }
                             Key("Del all", color = Look.Amber) {
                                 Native.labDelete(sel.number, true)
                                 deleteAsk = false
-                                rolls = parseLabRolls(Native.labRolls())
-                                selectedRoll = rolls.firstOrNull()?.number ?: -1
+                                refreshLab()
                             }
                             Key("Cancel", color = SAFELIGHT_DIM) { deleteAsk = false }
+                        }
+                    } else if (sel.isWaiting || redevMode) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    PRINT_SIZES.forEachIndexed { idx, (label, sz) ->
+                                        if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
+                                        Key(label, modifier = Modifier.defaultMinSize(28.dp, 40.dp), color = if (printSize == sz) SAFELIGHT else SAFELIGHT_DIM) { printSize = sz }
+                                    }
+                                }
+                                Row(
+                                    Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    PUSH_STOPS.forEachIndexed { idx, (label, ev) ->
+                                        if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
+                                        Key(label, modifier = Modifier.defaultMinSize(28.dp, 40.dp), color = if (pushStops == ev) SAFELIGHT else SAFELIGHT_DIM) { pushStops = ev }
+                                    }
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (redevMode) {
+                                    Key("Back", modifier = Modifier.defaultMinSize(38.dp, 40.dp), color = SAFELIGHT_DIM) { redevMode = false }
+                                } else {
+                                    Key("Lbl", modifier = Modifier.defaultMinSize(34.dp, 40.dp), color = SAFELIGHT_DIM) { editRollMemo(sel.number) }
+                                    if (!sel.inCamera) Key("Del", modifier = Modifier.defaultMinSize(34.dp, 40.dp), color = SAFELIGHT_DIM) { deleteAsk = true }
+                                }
+                                Box(
+                                    Modifier
+                                        .defaultMinSize(78.dp, 44.dp)
+                                        .border(1.dp, SAFELIGHT, RoundedCornerShape(3.dp))
+                                        .clickable {
+                                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                            if (redevMode) {
+                                                Native.labDelete(sel.number, false)
+                                                redevMode = false
+                                            }
+                                            onDevelop(sel.number, printSize, pushStops)
+                                        }
+                                        .padding(horizontal = 10.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Label(if (redevMode) "Re-dev" else "Develop", size = 12.sp, color = SAFELIGHT)
+                                }
+                            }
                         }
                     } else {
                         Row(
@@ -292,49 +484,15 @@ fun DarkroomScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            if (sel.isWaiting) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Row(
-                                        Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        PRINT_SIZES.forEachIndexed { idx, (label, sz) ->
-                                            if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
-                                            Key(label, modifier = Modifier.defaultMinSize(32.dp, 42.dp), color = if (printSize == sz) SAFELIGHT else SAFELIGHT_DIM) { printSize = sz }
-                                        }
-                                    }
-                                    Row(
-                                        Modifier.border(1.dp, SAFELIGHT_DIM, RoundedCornerShape(3.dp)).padding(horizontal = 2.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        PUSH_STOPS.forEachIndexed { idx, (label, ev) ->
-                                            if (idx > 0) Label("·", size = 11.sp, color = SAFELIGHT_DIM)
-                                            Key(label, modifier = Modifier.defaultMinSize(32.dp, 42.dp), color = if (pushStops == ev) SAFELIGHT else SAFELIGHT_DIM) { pushStops = ev }
-                                        }
-                                    }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Key("Label", modifier = Modifier.defaultMinSize(44.dp, 42.dp), color = SAFELIGHT_DIM) { editRollMemo(sel.number) }
+                                if (!sel.inCamera) Key("Del", modifier = Modifier.defaultMinSize(38.dp, 42.dp), color = SAFELIGHT_DIM) { deleteAsk = true }
+                                if (!sel.inCamera && hasRaws && (sel.isDeveloped || sel.jpegs > 0)) {
+                                    Key("Re-dev", modifier = Modifier.defaultMinSize(54.dp, 42.dp), color = Look.Amber) { redevMode = true }
                                 }
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    if (!sel.inCamera) Key("Del", modifier = Modifier.defaultMinSize(40.dp, 42.dp), color = SAFELIGHT_DIM) { deleteAsk = true }
-                                    Box(
-                                        Modifier
-                                            .defaultMinSize(88.dp, 46.dp)
-                                            .border(1.dp, SAFELIGHT, RoundedCornerShape(3.dp))
-                                            .clickable {
-                                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                                                onDevelop(sel.number, printSize, pushStops)
-                                            }
-                                            .padding(horizontal = 12.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Label("Develop", size = 13.sp, color = SAFELIGHT)
-                                    }
-                                }
-                            } else {
-                                if (!sel.inCamera) Key("Delete", color = SAFELIGHT_DIM) { deleteAsk = true }
-                                else Spacer(Modifier.width(1.dp))
-                                if (sel.jpegs > 0 || sel.isDeveloped) {
-                                    Key("View prints →", color = SAFELIGHT) { onOpenPrints(sel.number) }
-                                }
+                            }
+                            if (sel.jpegs > 0 || sel.isDeveloped) {
+                                Key("Prints →", color = SAFELIGHT) { onOpenPrints(sel.number) }
                             }
                         }
                     }
@@ -369,7 +527,9 @@ fun PrintsScreen(initialRoll: Int, onBack: () -> Unit) {
         prints = if (rollNo > 0) parseRollPrints(Native.labRollPrints(rollNo)).filter { it.jpegPath.isNotBlank() } else emptyList()
     }
 
+    val memos = remember { Card(context).loadMemos() }
     val currentRoll = rolls.find { it.number == rollNo }
+    val currentMemo = memos[rollNo]
 
     if (lightboxIdx in prints.indices) {
         Lightbox(
@@ -388,9 +548,14 @@ fun PrintsScreen(initialRoll: Int, onBack: () -> Unit) {
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Key("← Back", onClick = onBack)
-            Label(if (rollNo > 0) "PRINTS · ROLL %03d".format(rollNo) else "PRINTS", size = 14.sp, color = Look.Ivory)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Label(if (rollNo > 0) "PRINTS · ROLL %03d".format(rollNo) else "PRINTS", size = 14.sp, color = Look.Ivory)
+                if (!currentMemo.isNullOrBlank()) {
+                    Label(currentMemo, size = 10.sp, color = Look.Amber)
+                }
+            }
             if (prints.isNotEmpty()) {
-                Key("Sheet", color = Look.Amber) { shareContactSheet(context, currentRoll, prints) }
+                Key("Sheet", color = Look.Amber) { shareContactSheet(context, currentRoll, currentMemo, prints) }
             } else {
                 Spacer(Modifier.width(56.dp))
             }
@@ -552,7 +717,7 @@ private fun Lightbox(
     }
 }
 
-private fun shareContactSheet(context: Context, roll: LabRoll?, prints: List<PrintItem>) {
+private fun shareContactSheet(context: Context, roll: LabRoll?, memo: String?, prints: List<PrintItem>) {
     if (prints.isEmpty()) return
     val cols = 6
     val rows = (prints.size + cols - 1) / cols
@@ -586,7 +751,8 @@ private fun shareContactSheet(context: Context, roll: LabRoll?, prints: List<Pri
     }
     val holePaint = Paint().apply { color = 0xFF1A1816.toInt() }
 
-    val title = "ROLL %03d · %s".format(roll?.number ?: 0, (roll?.filmName ?: "M-FILM").uppercase())
+    val baseTitle = "ROLL %03d · %s".format(roll?.number ?: 0, (roll?.filmName ?: "M-FILM").uppercase())
+    val title = if (!memo.isNullOrBlank()) "$baseTitle — ${memo.uppercase()}" else baseTitle
     c.drawText(title, pad.toFloat(), 58f, titlePaint)
     val sub = "${prints.size} FRAMES · ${roll?.loaded?.take(10) ?: ""}"
     c.drawText(sub, w - pad - subPaint.measureText(sub), 58f, subPaint)
@@ -650,8 +816,12 @@ fun SettingsScreen(
     onToggleWind: () -> Unit,
     onToggleFinder: () -> Unit,
     onToggleFramelines: () -> Unit,
-    onToggleBwPreview: () -> Unit,
+    onToggleSpiritLevel: () -> Unit,
+    onToggleLiveLook: () -> Unit,
     onToggleDateStamp: () -> Unit,
+    onToggleGps: () -> Unit,
+    onToggleAutoClean: () -> Unit,
+    onCleanRaws: () -> Unit,
     onToggleHand: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -664,29 +834,43 @@ fun SettingsScreen(
             Spacer(Modifier.width(56.dp))
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(14.dp))
 
-        SettingRow("SHOOTING", if (ui.singleShot) "SINGLE (AUTO-DEV)" else "ROLL (12/24/36)", onToggleShooting)
-        SettingRow(
-            "PRINT SIZE (SINGLE)",
-            when (ui.defaultPrintSize) {
-                0 -> "S (720×480)"
-                1 -> "M (1440×960)"
-                else -> "L (FULL)"
-            },
-            onTogglePrintSize,
-        )
-        SettingRow("FILM ADVANCE", if (ui.realisticWind) "REALISTIC (WIND ON)" else "AUTO", onToggleWind)
-        SettingRow("VIEWFINDER", if (ui.cleanFinder) "CLEAN" else "INFO", onToggleFinder)
-        SettingRow("FRAMELINES", if (ui.framelines) "ON" else "OFF", onToggleFramelines)
-        SettingRow("B&W FILM PREVIEW", if (ui.bwPreview) "MONOCHROME" else "COLOUR", onToggleBwPreview)
-        SettingRow("DATE STAMP", if (ui.dateStamp) "ON" else "OFF", onToggleDateStamp)
-        SettingRow("LANDSCAPE GRIP", if (ui.leftHanded) "LEFT-HANDED" else "RIGHT-HANDED", onToggleHand)
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+            SettingRow("SHOOTING", if (ui.singleShot) "SINGLE (AUTO-DEV)" else "ROLL (12/24/36)", onToggleShooting)
+            SettingRow(
+                "PRINT SIZE (SINGLE)",
+                when (ui.defaultPrintSize) {
+                    0 -> "S (720×480)"
+                    1 -> "M (1440×960)"
+                    else -> "L (FULL)"
+                },
+                onTogglePrintSize,
+            )
+            SettingRow("FILM ADVANCE", if (ui.realisticWind) "REALISTIC (WIND ON)" else "AUTO", onToggleWind)
+            SettingRow("VIEWFINDER", if (ui.cleanFinder) "CLEAN" else "INFO", onToggleFinder)
+            SettingRow("FRAMELINES", if (ui.framelines) "ON" else "OFF", onToggleFramelines)
+            SettingRow("HORIZON LEVEL", if (ui.spiritLevel) "ON" else "OFF", onToggleSpiritLevel)
+            SettingRow(
+                "LIVE LOOK PREVIEW",
+                when (ui.filmPreviewMode) {
+                    2 -> "FILM LOOK"
+                    1 -> "B&W ONLY"
+                    else -> "RAW VIEW"
+                },
+                onToggleLiveLook,
+            )
+            SettingRow("DATE STAMP", if (ui.dateStamp) "ON" else "OFF", onToggleDateStamp)
+            SettingRow("GPS GEOTAG", if (ui.gpsTag) "ON" else "OFF", onToggleGps)
+            SettingRow("AUTO-CLEAN RAW", if (ui.autoCleanRaw) "ON (AFTER DEV)" else "OFF", onToggleAutoClean)
+            SettingRow("RAW STORAGE", "${formatMb(ui.rawBytes)} · TAP TO CLEAN", onCleanRaws)
+            SettingRow("LANDSCAPE GRIP", if (ui.leftHanded) "LEFT-HANDED" else "RIGHT-HANDED", onToggleHand)
 
-        Spacer(Modifier.height(24.dp))
-        Label("M-FILM FOR ANDROID  ·  GPL-2.0", size = 11.sp, color = Look.Dim)
-        Spacer(Modifier.height(4.dp))
-        Label("59 FILM TABLES BY PAT DAVID (CC BY-SA 4.0)", size = 11.sp, color = Look.Dim)
+            Spacer(Modifier.height(20.dp))
+            Label("M-FILM FOR ANDROID  ·  GPL-2.0", size = 11.sp, color = Look.Dim)
+            Spacer(Modifier.height(4.dp))
+            Label("59 FILM TABLES BY PAT DAVID (CC BY-SA 4.0)", size = 11.sp, color = Look.Dim)
+        }
     }
 }
 

@@ -45,6 +45,8 @@ void mf_set_shot_fstop(int fstop_x100);
 int  mf_lab_rolls(char *out, int out_size);
 int  mf_lab_roll_prints(int roll_no, char *out, int out_size);
 int  mf_lab_delete(int roll_no, int whole);
+int  mf_lab_has_raws(int roll_no);
+int  mf_import_roll(int film, int count, int *out_first_file);
 int  mf_dev_open(int roll_no, int size, int push_stops, int target_frame);
 int  mf_dev_step(int budget_ms, int out[3]);
 int  mf_dev_preview_bmp(uint32_t *argb, int w, int h);

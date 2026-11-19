@@ -127,7 +127,15 @@ class DevelopService : Service() {
                         }
                         Native.devClose()
                         if (!cancelled) {
-                            totalSaved += Card(this).exportPrintsSync()
+                            val card = Card(this)
+                            totalSaved += card.exportPrintsSync()
+                            val autoClean = getSharedPreferences("MainActivity", MODE_PRIVATE).getBoolean("auto_clean_raw", false)
+                            if (autoClean && job.targetFrame == 0) {
+                                val roll = parseLabRolls(Native.labRolls()).find { it.number == job.rollNo }
+                                if (roll != null && roll.isDeveloped && !roll.inCamera) {
+                                    card.cleanRawsForRoll(job.rollNo)
+                                }
+                            }
                         }
                     }
                     bmp.recycle()

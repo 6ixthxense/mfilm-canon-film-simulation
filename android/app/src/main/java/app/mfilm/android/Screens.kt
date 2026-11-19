@@ -62,7 +62,7 @@ import kotlin.math.abs
 
 private val SHELF_WOOD = Color(0xFF1E150F)
 private val SHELF_EDGE = Color(0xFF3A281B)
-private val GROUPS = listOf("Colour", "Slide", "B&W", "Cine")
+private val GROUPS = listOf("★", "Colour", "Slide", "B&W", "Cine")
 private val EXPOSURES = listOf(12, 24, 36)
 
 data class FilmEntry(
@@ -184,18 +184,36 @@ fun ShelfScreen(
     onOpenRoll: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val catalog = remember { loadFilmCatalog() }
-    var group by remember { mutableIntStateOf(0) }
-    val shelfFilms = remember(catalog, group) { catalog.filter { it.group == group } }
+    val prefs = remember { context.getSharedPreferences("MainActivity", android.content.Context.MODE_PRIVATE) }
+    var favKeys by remember { mutableStateOf(prefs.getStringSet("fav_films", emptySet())?.toSet() ?: emptySet()) }
+    var group by remember { mutableIntStateOf(if (favKeys.isNotEmpty()) 0 else 1) }
+    val shelfFilms = remember(catalog, group, favKeys) {
+        if (group == 0) catalog.filter { it.key in favKeys }
+        else catalog.filter { it.group == group - 1 }
+    }
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { shelfFilms.size })
     var leaderOut by remember(group, pagerState.currentPage) { mutableStateOf(false) }
     var exp by remember { mutableIntStateOf(36) }
     var fullSample by remember { mutableStateOf(false) }
 
+    fun toggleFav(key: String) {
+        val next = if (key in favKeys) favKeys - key else favKeys + key
+        favKeys = next
+        prefs.edit().putStringSet("fav_films", next).apply()
+        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+    }
+
     LaunchedEffect(group) {
         if (shelfFilms.isNotEmpty()) pagerState.scrollToPage(0)
+    }
+    LaunchedEffect(shelfFilms.size) {
+        if (shelfFilms.isNotEmpty() && pagerState.currentPage >= shelfFilms.size) {
+            pagerState.scrollToPage(shelfFilms.lastIndex)
+        }
     }
     LaunchedEffect(pagerState.settledPage) {
         if (shelfFilms.isNotEmpty()) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
@@ -253,9 +271,13 @@ fun ShelfScreen(
         // top bar: back + shelf tabs
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Key("← Back", onClick = onBack)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 GROUPS.forEachIndexed { idx, name ->
-                    Key(name, color = if (idx == group) Look.Amber else Look.Dim) {
+                    Key(
+                        name,
+                        modifier = Modifier.defaultMinSize(if (idx == 0) 34.dp else 44.dp, 44.dp),
+                        color = if (idx == group) Look.Amber else Look.Dim,
+                    ) {
                         group = idx
                         leaderOut = false
                     }
@@ -290,7 +312,10 @@ fun ShelfScreen(
             contentAlignment = Alignment.Center,
         ) {
             if (selected == null) {
-                Label("Empty shelf", color = Look.Dim)
+                Label(
+                    if (group == 0) "No favorites yet · tap ☆ on any film" else "Empty shelf",
+                    color = Look.Dim,
+                )
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     HorizontalPager(
@@ -343,8 +368,16 @@ fun ShelfScreen(
                     Box(Modifier.fillMaxWidth().height(14.dp).background(SHELF_WOOD).border(1.dp, SHELF_EDGE))
                     Spacer(Modifier.height(14.dp))
 
-                    // film title + note + live tone sample + specs
-                    Label(selected.name, size = 18.sp, color = Look.Ivory)
+                    // film title + fav pin + note + live tone sample + specs
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Label(selected.name, size = 18.sp, color = Look.Ivory)
+                        val isFav = selected.key in favKeys
+                        Key(
+                            if (isFav) "★" else "☆",
+                            modifier = Modifier.defaultMinSize(34.dp, 34.dp),
+                            color = if (isFav) Look.Amber else Look.Dim,
+                        ) { toggleFav(selected.key) }
+                    }
                     Spacer(Modifier.height(2.dp))
                     Label("ISO ${selected.iso}  ·  ${pagerState.currentPage + 1} OF ${shelfFilms.size}", size = 11.sp, color = Look.Dim)
                     if (selected.note.isNotBlank()) {

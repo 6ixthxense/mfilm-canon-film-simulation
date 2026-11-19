@@ -50,6 +50,8 @@ object Native {
     @JvmStatic external fun labRolls(): String
     @JvmStatic external fun labRollPrints(rollNo: Int): String
     @JvmStatic external fun labDelete(rollNo: Int, whole: Boolean): Int
+    @JvmStatic external fun labHasRaws(rollNo: Int): Boolean
+    @JvmStatic external fun importRoll(film: Int, count: Int, outFirstFile: IntArray): Int
     @JvmStatic external fun devOpen(rollNo: Int, size: Int, pushStops: Int, targetFrame: Int): Int
     /** out (3): currentFrameNo, doneFrames, progress0to1000; returns 1 developing, 0 done, -1 error */
     @JvmStatic external fun devStep(budgetMs: Int, out: IntArray): Int

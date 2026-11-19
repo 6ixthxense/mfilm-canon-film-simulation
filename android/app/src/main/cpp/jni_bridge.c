@@ -166,6 +166,20 @@ JNIEXPORT jint JNICALL FN(labDelete)(JNIEnv *env, jclass cls, jint rollNo, jbool
     return mf_lab_delete(rollNo, whole ? 1 : 0);
 }
 
+JNIEXPORT jboolean JNICALL FN(labHasRaws)(JNIEnv *env, jclass cls, jint rollNo)
+{
+    return mf_lab_has_raws(rollNo) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL FN(importRoll)(JNIEnv *env, jclass cls, jint film, jint count, jintArray outFirst)
+{
+    int first = 0;
+    int r = mf_import_roll(film, count, &first);
+    if (r > 0 && outFirst && (*env)->GetArrayLength(env, outFirst) >= 1)
+        (*env)->SetIntArrayRegion(env, outFirst, 0, 1, &first);
+    return r;
+}
+
 JNIEXPORT jint JNICALL FN(devOpen)(JNIEnv *env, jclass cls, jint rollNo, jint size, jint pushStops, jint targetFrame)
 {
     return mf_dev_open(rollNo, size, pushStops, targetFrame);

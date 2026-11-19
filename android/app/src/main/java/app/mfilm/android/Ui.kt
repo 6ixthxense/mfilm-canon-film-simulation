@@ -74,8 +74,11 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /*
  * The app's own screens: a film camera, not the Canon's buttons on glass.
@@ -115,6 +118,22 @@ fun Label(text: String, modifier: Modifier = Modifier, size: TextUnit = 13.sp, c
 
 enum class Route { CAMERA, SHELF, ROLL, DARKROOM, PRINTS, SETTINGS }
 
+val MANUAL_SHUTTERS = listOf(
+    "1/1000" to 1_000_000L,
+    "1/500" to 2_000_000L,
+    "1/250" to 4_000_000L,
+    "1/125" to 8_000_000L,
+    "1/60" to 16_666_667L,
+    "1/30" to 33_333_333L,
+    "1/15" to 66_666_667L,
+    "1/8" to 125_000_000L,
+    "1/4" to 250_000_000L,
+    "1/2" to 500_000_000L,
+    "1\"" to 1_000_000_000L,
+)
+
+val MANUAL_ISOS = listOf(100, 200, 400, 800, 1600, 3200)
+
 /** What the screens show: the activity keeps it up to date. */
 class Ui {
     var route by mutableStateOf(Route.CAMERA)
@@ -145,15 +164,27 @@ class Ui {
     var mfLoupe by mutableStateOf(false)
     var doubleExposure by mutableStateOf(false)
     var doubleFirstReady by mutableStateOf(false)
+    var halfFrame by mutableStateOf(false)
+    var halfFirstReady by mutableStateOf(false)
+    var manualExpSupported by mutableStateOf(false)
+    var manualExp by mutableStateOf(false)
+    var manualShutterIdx by mutableIntStateOf(3) // 1/125
+    var manualIsoIdx by mutableIntStateOf(2)     // 400
     var zoom by mutableFloatStateOf(1f)
     var lenses by mutableStateOf(listOf(1f))
     var pendingRolls by mutableIntStateOf(0)
     var leftHanded by mutableStateOf(false)
     var realisticWind by mutableStateOf(false)
     var cleanFinder by mutableStateOf(false)
-    var bwPreview by mutableStateOf(true)
+    var filmPreviewMode by mutableIntStateOf(2)  // 0=RAW, 1=B&W only, 2=FILM look
+    var filmColorMatrix by mutableStateOf<FloatArray?>(null)
     var isBwFilm by mutableStateOf(false)
+    var spiritLevel by mutableStateOf(true)
+    var tiltDeg by mutableFloatStateOf(0f)
     var dateStamp by mutableStateOf(false)
+    var gpsTag by mutableStateOf(false)
+    var autoCleanRaw by mutableStateOf(false)
+    var rawBytes by mutableStateOf(0L)
     var framelines by mutableStateOf(true)
     var printsRoll by mutableIntStateOf(-1)
     var defaultPrintSize by mutableIntStateOf(1)    // 0=S, 1=M, 2=L (for SINGLE mode)
@@ -178,6 +209,10 @@ class Actions(
     val wind: () -> Unit,
     val toggleTimer: () -> Unit,
     val toggleDoubleExp: () -> Unit,
+    val toggleHalfFrame: () -> Unit,
+    val toggleManualExp: () -> Unit,
+    val stepManualShutter: (Int) -> Unit,
+    val stepManualIso: (Int) -> Unit,
     val toggleMf: () -> Unit,
     val setMfDistance: (Float) -> Unit,
     val setLoupe: (Boolean) -> Unit,
@@ -557,19 +592,47 @@ fun ExposureDial(ui: Ui, vertical: Boolean, modifier: Modifier = Modifier, onSte
     }
 }
 
+/** Manual Shutter Speed & ISO mechanical dial bar when Manual exposure (M) is active. */
+@Composable
+fun ManualDial(ui: Ui, modifier: Modifier = Modifier, onStepShutter: (Int) -> Unit, onStepIso: (Int) -> Unit) {
+    val ssLabel = MANUAL_SHUTTERS.getOrElse(ui.manualShutterIdx) { MANUAL_SHUTTERS[3] }.first
+    val isoVal = MANUAL_ISOS.getOrElse(ui.manualIsoIdx) { 400 }
+    Row(
+        modifier
+            .background(Look.Window, RoundedCornerShape(3.dp))
+            .border(1.dp, Look.Brass, RoundedCornerShape(3.dp))
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            Label("SS", size = 10.sp, color = Look.Dim)
+            Key("‹", modifier = Modifier.defaultMinSize(30.dp, 38.dp), color = Look.Ivory) { onStepShutter(-1) }
+            Label(ssLabel, size = 12.sp, color = Look.Amber, modifier = Modifier.width(46.dp))
+            Key("›", modifier = Modifier.defaultMinSize(30.dp, 38.dp), color = Look.Ivory) { onStepShutter(1) }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            Label("ISO", size = 10.sp, color = Look.Dim)
+            Key("‹", modifier = Modifier.defaultMinSize(30.dp, 38.dp), color = Look.Ivory) { onStepIso(-1) }
+            Label("$isoVal", size = 12.sp, color = Look.Amber, modifier = Modifier.width(38.dp))
+            Key("›", modifier = Modifier.defaultMinSize(30.dp, 38.dp), color = Look.Ivory) { onStepIso(1) }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- the finder
 
 /** a view made by the activity, put where the layout has it (it may have been somewhere before) */
 @Composable
-private fun <T : View> Placed(view: T, bw: Boolean = false, modifier: Modifier = Modifier) {
+private fun <T : View> Placed(view: T, colorMatrix: FloatArray? = null, modifier: Modifier = Modifier) {
     AndroidView(
         factory = { (view.parent as? ViewGroup)?.removeView(view); view },
         modifier = modifier,
         update = { v ->
             if (android.os.Build.VERSION.SDK_INT >= 31) {
                 v.setRenderEffect(
-                    if (bw) android.graphics.RenderEffect.createColorFilterEffect(
-                        android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply { setSaturation(0f) })
+                    if (colorMatrix != null) android.graphics.RenderEffect.createColorFilterEffect(
+                        android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(colorMatrix))
                     ) else null
                 )
             }
@@ -587,7 +650,7 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
         val zoomScale = if (ui.mfLoupe) 2.5f else 1f
         Placed(
             preview,
-            bw = ui.bwPreview && ui.isBwFilm,
+            colorMatrix = ui.filmColorMatrix,
             modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = zoomScale, scaleY = zoomScale),
         )
         val view = LocalView.current
@@ -612,6 +675,15 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
                 },
             )
         }) {
+            val mx = size.width / 2f; val my = size.height / 2f
+
+            // Half-frame split mask: highlights active half (left first, then right)
+            if (ui.halfFrame) {
+                val maskX = if (ui.halfFirstReady) 0f else mx
+                drawRect(Color(0x99000000), Offset(maskX, 0f), Size(mx, size.height))
+                drawLine(Look.Brass.copy(alpha = 0.8f), Offset(mx, 0f), Offset(mx, size.height), 1.5.dp.toPx())
+            }
+
             if (!ui.cleanFinder && ui.framelines) {
                 val inset = 14.dp.toPx()
                 val arm = 16.dp.toPx()
@@ -627,17 +699,41 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
                 drawLine(frameColor, Offset(x0, y1), Offset(x0, y1 - arm), lw)
                 drawLine(frameColor, Offset(x1, y1), Offset(x1 - arm, y1), lw)
                 drawLine(frameColor, Offset(x1, y1), Offset(x1, y1 - arm), lw)
-                val mx = size.width / 2f; val my = size.height / 2f
-                val cr = 8.dp.toPx()
-                drawLine(frameColor, Offset(mx - cr, my), Offset(mx + cr, my), lw)
-                drawLine(frameColor, Offset(mx, my - cr), Offset(mx, my + cr), lw)
+                if (!ui.spiritLevel) {
+                    val cr = 8.dp.toPx()
+                    drawLine(frameColor, Offset(mx - cr, my), Offset(mx + cr, my), lw)
+                    drawLine(frameColor, Offset(mx, my - cr), Offset(mx, my + cr), lw)
+                }
+            }
+
+            // Electronic Horizon Spirit Level at finder center
+            if (!ui.cleanFinder && ui.spiritLevel) {
+                val isLevel = abs(ui.tiltDeg) <= 1.5f
+                val refGap = 32.dp.toPx()
+                val refLen = 8.dp.toPx()
+                val refCol = if (isLevel) Look.Amber else Look.Ivory.copy(alpha = 0.35f)
+                val refW = 1.dp.toPx()
+                drawLine(refCol, Offset(mx - refGap - refLen, my), Offset(mx - refGap, my), refW)
+                drawLine(refCol, Offset(mx + refGap, my), Offset(mx + refGap + refLen, my), refW)
+
+                val rad = (-ui.tiltDeg.coerceIn(-35f, 35f)) * (PI / 180.0)
+                val halfBar = 22.dp.toPx()
+                val dx = (cos(rad) * halfBar).toFloat()
+                val dy = (sin(rad) * halfBar).toFloat()
+                drawLine(
+                    if (isLevel) Look.Amber else Look.Ivory.copy(alpha = 0.6f),
+                    Offset(mx - dx, my - dy),
+                    Offset(mx + dx, my + dy),
+                    if (isLevel) 2.dp.toPx() else 1.2.dp.toPx(),
+                )
             }
 
             // Rangefinder live meter & exposure readout along bottom edge
             if (!ui.cleanFinder) {
                 val pad = 12.dp.toPx()
-                val lit = ui.halfPressed || ui.focusLocked
-                val readout = "${ui.liveShutter}  ${ui.liveFstop}  ISO ${ui.liveIso}"
+                val lit = ui.halfPressed || ui.focusLocked || ui.manualExp
+                val modePrefix = if (ui.manualExp) "M  " else ""
+                val readout = "$modePrefix${ui.liveShutter}  ${ui.liveFstop}  ISO ${ui.liveIso}"
                 val m = text.measure(readout, engraved(10.sp, if (lit) Look.Amber else Look.Ivory.copy(alpha = 0.72f)))
                 drawText(m, topLeft = Offset(pad, size.height - m.size.height - 8.dp.toPx()))
 
@@ -657,7 +753,7 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
                 }
             }
 
-            // Top-left status badges: 2.5X loupe, 2X double exposure
+            // Top-left status badges: 2.5X loupe, 2X double exposure, 1/2 half-frame
             var topY = 8.dp.toPx()
             if (ui.mfLoupe) {
                 val m = text.measure("2.5X FOCUS", engraved(10.sp, Look.Amber))
@@ -666,6 +762,12 @@ private fun Finder(ui: Ui, preview: View, on: Actions, ratio: Float, modifier: M
             }
             if (ui.doubleExposure) {
                 val tag = if (ui.doubleFirstReady) "2X · 1/2 READY" else "2X"
+                val m = text.measure(tag, engraved(10.sp, Look.Amber))
+                drawText(m, topLeft = Offset(10.dp.toPx(), topY))
+                topY += m.size.height + 4.dp.toPx()
+            }
+            if (ui.halfFrame) {
+                val tag = if (ui.halfFirstReady) "HALF · R READY" else "HALF · L"
                 val m = text.measure(tag, engraved(10.sp, Look.Amber))
                 drawText(m, topLeft = Offset(10.dp.toPx(), topY))
             }
@@ -731,15 +833,19 @@ private fun Level(ui: Ui, preview: View, on: Actions) {
                 if (ui.lenses.size > 1) LensRing(ui, onZoom = on.zoom)
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (ui.mfSupported) {
-                        Key(if (ui.mfEnabled) "MF" else "AF", color = if (ui.mfEnabled) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(32.dp, 38.dp), onClick = on.toggleMf)
+                        Key(if (ui.mfEnabled) "MF" else "AF", color = if (ui.mfEnabled) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(30.dp, 36.dp), onClick = on.toggleMf)
                     }
-                    Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TMR", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(32.dp, 38.dp), onClick = on.toggleTimer)
-                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(28.dp, 38.dp), onClick = on.toggleDoubleExp)
+                    if (ui.manualExpSupported) {
+                        Key(if (ui.manualExp) "M" else "AE", color = if (ui.manualExp) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(28.dp, 36.dp), onClick = on.toggleManualExp)
+                    }
+                    Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TMR", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(30.dp, 36.dp), onClick = on.toggleTimer)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    val flsLabel = when (ui.flashMode) { 1 -> "FL:A"; 2 -> "FL:1"; else -> "FLS" }
-                    Key(flsLabel, color = if (ui.flashMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(40.dp, 38.dp), onClick = on.toggleFlash)
-                    Key(if (ui.frontCamera) "FRT" else "CAM", color = if (ui.frontCamera) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(40.dp, 38.dp), onClick = on.toggleCamera)
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(26.dp, 36.dp), onClick = on.toggleDoubleExp)
+                    Key("½", color = if (ui.halfFrame) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(24.dp, 36.dp), onClick = on.toggleHalfFrame)
+                    val flsLabel = when (ui.flashMode) { 1 -> "FA"; 2 -> "F1"; else -> "FL" }
+                    Key(flsLabel, color = if (ui.flashMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(24.dp, 36.dp), onClick = on.toggleFlash)
+                    Key(if (ui.frontCamera) "FR" else "CM", color = if (ui.frontCamera) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(24.dp, 36.dp), onClick = on.toggleCamera)
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     PrintsKey(DevelopState.running, onClick = on.prints)
@@ -754,7 +860,7 @@ private fun Level(ui: Ui, preview: View, on: Actions) {
     }
     val grip: @Composable () -> Unit = {
         Row(Modifier.width(196.dp).fillMaxHeight().padding(vertical = 14.dp)) {
-            if (ui.leftHanded && !ui.cleanFinder) {
+            if (ui.leftHanded && !ui.cleanFinder && !ui.manualExp) {
                 ExposureDial(ui, true, Modifier.padding(start = 10.dp).width(46.dp).fillMaxHeight(), on.exposure)
             }
             Column(
@@ -766,7 +872,7 @@ private fun Level(ui: Ui, preview: View, on: Actions) {
                 if (ui.needWind) WindLever(onWind = on.wind)
                 else Spacer(Modifier.height(48.dp))
             }
-            if (!ui.leftHanded && !ui.cleanFinder) {
+            if (!ui.leftHanded && !ui.cleanFinder && !ui.manualExp) {
                 ExposureDial(ui, true, Modifier.padding(end = 10.dp).width(46.dp).fillMaxHeight(), on.exposure)
             }
         }
@@ -777,8 +883,11 @@ private fun Level(ui: Ui, preview: View, on: Actions) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Finder(ui, preview, on, 3f / 2, Modifier.fillMaxHeight())
             }
+            if (!ui.cleanFinder && ui.manualExp) {
+                ManualDial(ui, Modifier.padding(horizontal = 24.dp, vertical = 4.dp).fillMaxWidth().height(38.dp), on.stepManualShutter, on.stepManualIso)
+            }
             if (!ui.cleanFinder && ui.mfEnabled) {
-                FocusDial(ui, Modifier.padding(horizontal = 24.dp, vertical = 6.dp).fillMaxWidth().height(34.dp), on.setMfDistance, on.setLoupe)
+                FocusDial(ui, Modifier.padding(horizontal = 24.dp, vertical = 4.dp).fillMaxWidth().height(34.dp), on.setMfDistance, on.setLoupe)
             }
         }
         if (ui.leftHanded) support() else grip()
@@ -809,28 +918,36 @@ private fun Upright(ui: Ui, preview: View, on: Actions) {
         }
         if (!ui.cleanFinder) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (ui.lenses.size > 1) LensRing(ui, onZoom = on.zoom)
-                    val flsLabel = when (ui.flashMode) { 1 -> "FL:A"; 2 -> "FL:1"; else -> "FLS" }
-                    Key(flsLabel, color = if (ui.flashMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(38.dp, 40.dp), onClick = on.toggleFlash)
-                    Key(if (ui.frontCamera) "FRT" else "CAM", color = if (ui.frontCamera) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(38.dp, 40.dp), onClick = on.toggleCamera)
+                    val flsLabel = when (ui.flashMode) { 1 -> "FA"; 2 -> "F1"; else -> "FL" }
+                    Key(flsLabel, color = if (ui.flashMode != 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(32.dp, 38.dp), onClick = on.toggleFlash)
+                    Key(if (ui.frontCamera) "FRT" else "CAM", color = if (ui.frontCamera) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(34.dp, 38.dp), onClick = on.toggleCamera)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (ui.mfSupported) {
-                        Key(if (ui.mfEnabled) "MF" else "AF", color = if (ui.mfEnabled) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(36.dp, 40.dp), onClick = on.toggleMf)
+                    if (ui.manualExpSupported) {
+                        Key(if (ui.manualExp) "M" else "AE", color = if (ui.manualExp) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(30.dp, 38.dp), onClick = on.toggleManualExp)
                     }
-                    Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TMR", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(36.dp, 40.dp), onClick = on.toggleTimer)
-                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(34.dp, 40.dp), onClick = on.toggleDoubleExp)
+                    if (ui.mfSupported) {
+                        Key(if (ui.mfEnabled) "MF" else "AF", color = if (ui.mfEnabled) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(30.dp, 38.dp), onClick = on.toggleMf)
+                    }
+                    Key(if (ui.timerSec > 0) "${ui.timerSec}S" else "TMR", color = if (ui.timerSec > 0) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(32.dp, 38.dp), onClick = on.toggleTimer)
+                    Key("2X", color = if (ui.doubleExposure) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(28.dp, 38.dp), onClick = on.toggleDoubleExp)
+                    Key("½", color = if (ui.halfFrame) Look.Amber else Look.Dim, modifier = Modifier.defaultMinSize(26.dp, 38.dp), onClick = on.toggleHalfFrame)
                 }
             }
             if (ui.mfEnabled) {
                 FocusDial(ui, Modifier.padding(horizontal = 22.dp, vertical = 4.dp).fillMaxWidth().height(36.dp), on.setMfDistance, on.setLoupe)
             }
-            ExposureDial(ui, false, Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(46.dp), on.exposure)
+            if (ui.manualExp) {
+                ManualDial(ui, Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(46.dp), on.stepManualShutter, on.stepManualIso)
+            } else {
+                ExposureDial(ui, false, Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(46.dp), on.exposure)
+            }
         }
         Row(
             Modifier.fillMaxWidth().height(168.dp).padding(horizontal = 18.dp),

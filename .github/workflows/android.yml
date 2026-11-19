@@ -42,10 +42,10 @@ jobs:
 
       - name: C smoke test
         run: |
-          gcc -c -std=gnu99 -O2 -DFOS_DEV_RAWIN -DMFILM_VERSION=\"ci\" \
+          gcc -c -std=gnu99 -O3 -DFOS_DEV_RAWIN -DFOS_MULTITHREAD -DMFILM_VERSION=\"ci\" \
             -Dfos_port_model=sim_port_model -Iml-dev/filmos \
             ml-dev/filmos/sim/port_files.c -o /tmp/port_files.o
-          gcc -std=gnu99 -O2 -DFOS_DEV_RAWIN -DMFILM_VERSION=\"ci\" \
+          gcc -std=gnu99 -O3 -DFOS_DEV_RAWIN -DFOS_MULTITHREAD -DMFILM_VERSION=\"ci\" \
             -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare \
             -Wno-unused-variable -Wno-unused-but-set-variable \
             -Iml-dev/filmos \
